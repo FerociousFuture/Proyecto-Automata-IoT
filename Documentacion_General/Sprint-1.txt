@@ -5,3 +5,5 @@ Historias Seleccionadas: HU-03 y la HU del Panel Web Inicial.
 Sprint Backlog:
 
 * Coneccion inicial entre la ESP32 y el sensor MPU-6050 con el entorno de desarollo.
+* Finalizar captura de datos usando los sensores.
+* creacion de entorno web de desarollo
