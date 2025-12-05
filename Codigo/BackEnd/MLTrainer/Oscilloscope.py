@@ -10,7 +10,6 @@ class Input():
         self.angRZ = angRZ
     
     def toDictionary(self):
-        # Devuelve un diccionario simple (sin anidar en un conjunto)
         return {"accX": self.accX, "accY": self.accY, "accZ": self.accZ,
                 "angRX": self.angRX, "angRY": self.angRY,"angRZ": self.angRZ}
 
@@ -25,6 +24,5 @@ class Mpu6050():
         return self.data
 
     def getDataDictList(self):
-        # Mapea los objetos Input a una lista de diccionarios
         dictionary = [input.toDictionary() for input in self.data]
         return dictionary
