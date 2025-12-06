@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema Completo</title>
+    <style>
+        /* --- ESTILOS BASE --- */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #e9ecef;
+            margin: 0;
+            padding: 0;
+            /* Flexbox para centrar SOLAMENTE la tarjeta de login */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden; /* Evita scroll mientras estamos en login */
+        }
+
+        /* --- 1. ESTILOS DE LA TARJETA DE LOGIN/REGISTRO --- */
+        .auth-container {
+            background-color: white;
+            padding: 2.5rem;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+            z-index: 1; /* Nivel bajo */
+            position: relative;
+        }
+
+        h2 { color: #2c3e50; margin-bottom: 1.5rem; }
+
+        .input-group { margin-bottom: 1.2rem; text-align: left; }
+        .input-group label { display: block; margin-bottom: 0.5rem; color: #555; }
+        .input-group input {
+            width: 100%; padding: 12px; border: 1px solid #ddd;
+            border-radius: 6px; box-sizing: border-box;
+        }
+
+        .btn {
+            width: 100%; padding: 12px; background-color: #007bff;
+            color: white; border: none; border-radius: 6px;
+            font-size: 1rem; cursor: pointer; margin-top: 10px;
+        }
+        .btn:hover { background-color: #0056b3; }
+
+        .toggle-link { margin-top: 1.5rem; font-size: 0.9rem; color: #666; }
+        .toggle-link a { color: #007bff; cursor: pointer; font-weight: bold; }
+
+        .hidden { display: none !important; }
+
+        /* --- 2. ESTILOS DE LA PANTALLA COMPLETA (DASHBOARD) --- */
+        #app-dashboard {
+            position: fixed; /* Fijo sobre toda la pantalla */
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #f4f6f9;
+            z-index: 999; /* Asegura que esté encima de todo */
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto; /* Permite scroll si el contenido es largo */
+        }
+
+        /* Barra de navegación superior */
+        .navbar {
+            background-color: #343a40; /* Color oscuro */
+            color: white;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between; /* Separa título y botón */
+            align-items: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .navbar-brand { font-size: 1.5rem; font-weight: bold; }
+        .navbar-user { font-size: 1rem; margin-right: 1rem; color: #ccc; }
+
+        /* Botón de cerrar sesión en la barra */
+        .btn-logout {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .btn-logout:hover { background-color: #c82333; }
+
+        /* Contenido principal del dashboard */
+        .main-content {
+            padding: 3rem;
+            flex: 1; /* Ocupa el resto del espacio */
+        }
+
+        .welcome-card {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="auth-container" id="auth-container">
+        
+        <div id="login-form-box">
+            <h2>Iniciar Sesión</h2>
+            <form id="loginForm">
+                <div class="input-group">
+                    <label>Usuario</label>
+                    <input type="text" id="loginUser" required placeholder="Ingresa tu usuario">
+                </div>
+                <div class="input-group">
+                    <label>Contraseña</label>
+                    <input type="password" id="loginPass" required placeholder="Ingresa tu contraseña">
+                </div>
+                <button type="submit" class="btn">Entrar</button>
+            </form>
+            <div class="toggle-link">
+                ¿No tienes cuenta? <a onclick="mostrarRegistro()">Regístrate aquí</a>
+            </div>
+        </div>
+
+        <div id="register-form-box" class="hidden">
+            <h2>Crear Cuenta</h2>
+            <form id="registerForm">
+                <div class="input-group">
+                    <label>Nombre</label>
+                    <input type="text" id="regNombre" required>
+                </div>
+                <div class="input-group">
+                    <label>Usuario</label>
+                    <input type="text" id="regUser" required>
+                </div>
+                <div class="input-group">
+                    <label>Contraseña</label>
+                    <input type="password" id="regPass" required>
+                </div>
+                <button type="submit" class="btn">Registrarse</button>
+            </form>
+            <div class="toggle-link">
+                ¿Ya tienes cuenta? <a onclick="mostrarLogin()">Inicia sesión aquí</a>
+            </div>
+        </div>
+    </div>
+
+    <div id="app-dashboard" class="hidden">
+        
+        <nav class="navbar">
+            <div class="navbar-brand">Mi Sistema</div>
+            <div style="display: flex; align-items: center;">
+                <span class="navbar-user">Hola, <strong id="navUsername">Usuario</strong></span>
+                <button onclick="cerrarSesion()" class="btn-logout">Cerrar Sesión</button>
+            </div>
+        </nav>
+
+        <div class="main-content">
+            <div class="welcome-card">
+                <h1>¡Bienvenido al Panel de Control!</h1>
+                <p>Agregar lo demas que falte colocar en el panel .</p>
+                <hr>
+                <p style="color: #666;">Tu sesión está activa.</p>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- VARIABLES ---
+        const authContainer = document.getElementById('auth-container');
+        const loginBox = document.getElementById('login-form-box');
+        const registerBox = document.getElementById('register-form-box');
+        const dashboard = document.getElementById('app-dashboard');
+        const navUsername = document.getElementById('navUsername');
+
+        // --- FUNCIONES DE NAVEGACIÓN ---
+
+        function mostrarRegistro() {
+            loginBox.classList.add('hidden');
+            registerBox.classList.remove('hidden');
+        }
+
+        function mostrarLogin() {
+            registerBox.classList.add('hidden');
+            loginBox.classList.remove('hidden');
+        }
+
+        function entrarAlSistema(usuario) {
+            // 1. Ocultamos la tarjeta de login
+            authContainer.classList.add('hidden');
+            
+            // 2. Actualizamos el nombre en la barra superior
+            navUsername.textContent = usuario;
+
+            // 3. Mostramos el dashboard de pantalla completa
+            dashboard.classList.remove('hidden');
+        }
+
+        function cerrarSesion() {
+            // 1. Ocultamos el dashboard
+            dashboard.classList.add('hidden');
+
+            // 2. Limpiamos los campos
+            document.getElementById('loginUser').value = '';
+            document.getElementById('loginPass').value = '';
+
+            // 3. Mostramos de nuevo la tarjeta de login
+            authContainer.classList.remove('hidden');
+            mostrarLogin();
+        }
+
+        // --- EVENTOS DE FORMULARIOS ---
+
+        document.getElementById('loginForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const user = document.getElementById('loginUser').value;
+            // Aquí validarías con tu Base de Datos
+            if(user) entrarAlSistema(user);
+        });
+
+        document.getElementById('registerForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const user = document.getElementById('regUser').value;
+            alert('Registro exitoso. Iniciando sesión...');
+            entrarAlSistema(user);
+        });
+
+    </script>
+</body>
+</html>
