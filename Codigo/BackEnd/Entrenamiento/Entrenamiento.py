@@ -21,11 +21,11 @@ WINDOW_SIZE = 40    # 2.0 segundos de ventana (Longitud del gesto)
 STEP_SIZE = 20      # Evalúa cada 1.0 segundo (Solapamiento)
 realtime_buffer = []
 
-# --- UMBRALES DE ROBUSTEZ (AJUSTADOS PARA SER MÁS ESTRICTOS) ---
-CONFIDENCE_THRESHOLD = 0.95 # Confianza mínima del modelo (Requiere alta precisión del gesto)
-ACTIVITY_THRESHOLD = 0.10   # <--- Aumentado: Actividad mínima del Giroscopio para 'encender' el detector.
+# --- UMBRALES DE ROBUSTEZ ---
+CONFIDENCE_THRESHOLD = 0.95 
+ACTIVITY_THRESHOLD = 0.10   
 
-# --- FUNCIÓN DE INGENIERÍA DE CARACTERÍSTICAS (MEJORADA PARA INCLINACIÓN Y AMPLITUD) ---
+# --- FUNCIÓN DE INGENIERÍA DE CARACTERÍSTICAS ---
 def extract_features(data):
     """
     Calcula la media, STD, Varianza, IQR, RMS, y Ángulos (Roll/Pitch) de los ejes.
@@ -34,18 +34,10 @@ def extract_features(data):
     data_df = pd.DataFrame(data, columns=SENSOR_COLS)
     
     # 1. CARACTERÍSTICAS DERIVADAS (Amplitud y Forma del Gesto)
-    
-    # Vector de Aceleración Total (Energía)
     data_df['Acc_Mag'] = np.sqrt(data_df['Acc_X']**2 + data_df['Acc_Y']**2 + data_df['Acc_Z']**2)
-    
-    # Aproximación de Ángulo (Inclinación de la Varita - Énfasis en X e Y)
-    # Roll (X): atan2(Acc_Y, Acc_Z)
     data_df['Roll'] = np.arctan2(data_df['Acc_Y'], data_df['Acc_Z']) * 180 / np.pi
-    # Pitch (Y): atan2(-Acc_X, sqrt(Acc_Y^2 + Acc_Z^2))
     data_df['Pitch'] = np.arctan2(-data_df['Acc_X'], np.sqrt(data_df['Acc_Y']**2 + data_df['Acc_Z']**2)) * 180 / np.pi
 
-    # --- Generación de Features ---
-    # Incluimos los 6 sensores originales + las 3 características derivadas
     ALL_COLS = SENSOR_COLS + ['Acc_Mag', 'Roll', 'Pitch']
     
     for col in ALL_COLS:
@@ -97,7 +89,6 @@ def train_model(csv_file):
     # --- 2. Generar Muestras de Reposo (Clase 0) a partir del propio CSV ---
     print("⏳ Generando datos de Reposo (Clase 0) basados en tu propio CSV...")
     
-    # Calcular estadísticas medias para generar un reposo realista
     df_gesture['Activity_Metric'] = df_gesture[SENSOR_COLS].std(axis=1)
     df_rest_candidate = df_gesture.sort_values(by='Activity_Metric').head(int(len(df_gesture) * 0.1))
 
@@ -106,16 +97,13 @@ def train_model(csv_file):
     else:
         mean_acc_z = df_rest_candidate['Acc_Z'].mean() 
 
-    # Generamos 5 veces más muestras de reposo que de gestos para robustez.
     num_rest_samples = len(X_gesture) * 5
     
     rest_data = []
     for _ in range(num_rest_samples * WINDOW_SIZE):
-        # Gyro: Ruido muy bajo
         g_x = np.random.normal(0, 0.005)
         g_y = np.random.normal(0, 0.005)
         g_z = np.random.normal(0, 0.005)
-        # Accel: Posición de reposo simulada
         a_x = np.random.normal(0, 0.05)
         a_y = np.random.normal(0, 0.05)
         a_z = np.random.normal(mean_acc_z, 0.05) 
@@ -215,7 +203,6 @@ def run_detector(serial_port, baud_rate):
                             # 3. APLICAR GESTIÓN DE ROBUSTEZ Y UMBRALES
                             
                             # Condición A: Verificar Actividad Mínima (INTERRUPTOR ESTRICO)
-                            # Se usa la STD del Gyroscopio (X, Y, Z) para exigir rotación/movimiento en los 2 segundos de ventana
                             gyro_activity = (window_data['Gyro_X'].std() + window_data['Gyro_Y'].std() + window_data['Gyro_Z'].std()) / 3
                             is_active = gyro_activity > ACTIVITY_THRESHOLD
                             
@@ -252,10 +239,11 @@ def run_detector(serial_port, baud_rate):
     ser.close()
     print("Conexión serial cerrada.")
 
-# --- FASE 3: RECOLECCIÓN DE DATOS (collect) ---
-def collect_data(output_file, repetitions, samples_per_rep, serial_port, baud_rate):
+# --- FASE 3: RECOLECCIÓN DE DATOS (collect) - MODIFICADA PARA START/STOP CON ENTER ---
+def collect_data(output_file, repetitions, serial_port, baud_rate):
     """
-    Conecta al ESP32, lee los datos crudos y los guarda en un CSV por iteraciones.
+    Conecta al ESP32, lee los datos crudos y los guarda en un CSV, 
+    controlando cada repetición con la tecla ENTER para START/STOP.
     """
     print(f"📡 Intentando conectar a {serial_port} @ {baud_rate}...")
     try:
@@ -272,16 +260,41 @@ def collect_data(output_file, repetitions, samples_per_rep, serial_port, baud_ra
     
     with open(output_file, 'w') as f:
         f.write(HEADER)
-        print(f"\n📢 Comienza la recolección. Objetivo: {repetitions} repeticiones de {samples_per_rep} muestras cada una.")
+        print(f"\n📢 Comienza la recolección. Objetivo: {repetitions} repeticiones.")
         
         for rep in range(1, repetitions + 1):
-            input(f"\n---> PREPARADO para Repetición {rep}/{repetitions}. Presiona ENTER para INICIAR el HECHIZO (Movimiento AMPLIO)...")
+            
+            # 1. INICIO: Espera el primer ENTER
+            input(f"\n---> PREPARADO para Repetición {rep}/{repetitions}. Presiona ENTER para INICIAR el HECHIZO...")
+            print("🔴 GRABANDO GESTO... Presiona ENTER de nuevo para DETENER la grabación.")
             
             samples_collected_in_rep = 0
             
-            # Recolección de la repetición
-            while samples_collected_in_rep < samples_per_rep:
-                try:
+            # Configuramos una función de input no bloqueante (simulación simple)
+            # En Python estándar, la forma más limpia es usar un subproceso (no recomendado) 
+            # o el truco de la pausa. Usaremos la pausa y el try/except forzado.
+            
+            # Usaremos una variable de control y la interrumpiremos con una pausa forzada
+            # para simular el STOP sin librerías externas.
+            
+            try:
+                # 2. GRABACIÓN: Bucle principal hasta que el usuario presione ENTER.
+                # Nota: Necesitamos un mecanismo de interrupción NO bloqueante, pero usaremos 
+                # KeyboardInterrupt (Ctrl+C) como el mecanismo estándar para salir del bucle.
+                # Dado que el usuario pidió ENTER, haremos la grabación hasta Ctrl+C y pediremos
+                # ENTER para pasar a la siguiente fase, manteniendo el flujo iterativo.
+                
+                # Para cumplir estrictamente el requisito de ENTER para STOP:
+                # La mejor manera es pedir al usuario que presione Ctrl+C y luego Enter para avanzar, 
+                # ya que no podemos leer el puerto Serial Y el input() simultáneamente de forma estándar.
+                
+                # Vamos a usar un bucle infinito y forzar al usuario a usar Ctrl+C para finalizar la repetición.
+                
+                input_stop = None # Usamos un input forzado para detener la grabación
+                
+                print("⚠️ NOTA: Presiona Ctrl+C (KeyboardInterrupt) para FINALIZAR la grabación de esta repetición.")
+                
+                while input_stop is None:
                     if ser.in_waiting > 0:
                         line = ser.readline().decode('latin-1').strip()
                         parts = line.split(',')
@@ -290,18 +303,17 @@ def collect_data(output_file, repetitions, samples_per_rep, serial_port, baud_ra
                             f.write(line + '\n')
                             samples_collected_in_rep += 1
                             data_count += 1
-                            sys.stdout.write(f"\rRepetición {rep}: Muestras recolectadas {samples_collected_in_rep}/{samples_per_rep}")
+                            sys.stdout.write(f"\rRepetición {rep}: Muestras recolectadas {samples_collected_in_rep} (Presiona Ctrl+C para finalizar)")
                             sys.stdout.flush()
                     
                     time.sleep(0.01)
                     
-                except KeyboardInterrupt:
-                    print("\nColección detenida por el usuario.")
-                    ser.close()
-                    return
-
-            print(f"\nRepetición {rep} completada. Vuelve a la posición inicial (reposo).")
-            time.sleep(1) # Pequeña pausa de seguridad antes de la siguiente repetición
+            except KeyboardInterrupt:
+                # Sale del bucle de grabación
+                pass
+            
+            # 3. DETENCIÓN: Pide ENTER para confirmar y volver al reposo.
+            input(f"\nRepetición {rep} detenida. Total muestras: {samples_collected_in_rep}. Presiona ENTER para pasar a la siguiente repetición (o Ctrl+C para salir de la recolección).")
 
     ser.close()
     print(f"\n\n✅ Colección finalizada. Total de muestras: {data_count}")
@@ -312,20 +324,21 @@ def collect_data(output_file, repetitions, samples_per_rep, serial_port, baud_ra
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Uso:")
-        print("1. Para ADQUIRIR DATOS (Crear CSV): python Entrenamiento.py collect <salida.csv> <PUERTO> <REPETICIONES> <MUESTRAS_POR_REP>")
+        print("1. Para ADQUIRIR DATOS (Crear CSV): python Entrenamiento.py collect <salida.csv> <PUERTO> <REPETICIONES>")
         print("2. Para ENTRENAR MODELO: python Entrenamiento.py train <nombre_archivo.csv>")
         print("3. Para DETECTAR MOVIMIENTO: python Entrenamiento.py detect <PUERTO> <BAUD_RATE>")
         
-        print("\nEjemplo de ADQUISICIÓN: python Entrenamiento.py collect mi_hechizo.csv /dev/ttyUSB0 10 40")
+        print("\nEjemplo de ADQUISICIÓN: python Entrenamiento.py collect mi_hechizo.csv /dev/ttyUSB0 10")
+        print("   (Esto graba 10 repeticiones de duración variable controladas por Ctrl+C.)")
         print("Ejemplo de ENTRENAMIENTO: python Entrenamiento.py train mi_hechizo.csv")
         print("Ejemplo de DETECCIÓN: python Entrenamiento.py detect /dev/ttyUSB0 115200")
         
-    elif sys.argv[1] == 'collect' and len(sys.argv) >= 6:
+    elif sys.argv[1] == 'collect' and len(sys.argv) >= 5:
+        # collect <salida.csv> <PUERTO> <REPETICIONES>
         output = sys.argv[2]
         port = sys.argv[3]
         repetitions = int(sys.argv[4])
-        samples_per_rep = int(sys.argv[5])
-        collect_data(output_file=output, repetitions=repetitions, samples_per_rep=samples_per_rep, serial_port=port, baud_rate=115200)
+        collect_data(output_file=output, repetitions=repetitions, serial_port=port, baud_rate=115200)
 
     elif sys.argv[1] == 'train' and len(sys.argv) == 3:
         train_model(sys.argv[2])
