@@ -17,30 +17,38 @@ NUM_SENSOR_VALUES = 6
 HEADER = "Gyro_X,Gyro_Y,Gyro_Z,Acc_X,Acc_Y,Acc_Z\n"
 
 # --- CLAVES PARA LA CLASIFICACIÓN DE GESTOS ---
-WINDOW_SIZE = 40    # 2.0 segundos de ventana de análisis (Longitud del gesto)
-STEP_SIZE = 20      # Evalúa cada 1.0 segundo (Solapamiento)
+WINDOW_SIZE = 40    # 2.0 segundos de ventana de análisis
+STEP_SIZE = 20      # Evalúa cada 1.0 segundo
 realtime_buffer = []
 
-# --- UMBRALES DE ROBUSTEZ (Detección por Secuencia) ---
-CONFIDENCE_THRESHOLD = 0.95 # <--- Requisito de Confianza MEDIA de la secuencia (95% de match)
+# --- UMBRALES DE ROBUSTEZ ---
+CONFIDENCE_THRESHOLD = 0.95 
 ACTIVITY_THRESHOLD = 0.10   
-SEQUENCE_LENGTH = 5         # <--- Longitud de la secuencia a evaluar (5 ventanas = 5 segundos)
-confidence_history = []     # Buffer para almacenar las confianzas de las últimas 5 ventanas
+SEQUENCE_LENGTH = 5         
+confidence_history = []     
 
-# --- FUNCIÓN DE INGENIERÍA DE CARACTERÍSTICAS ---
+# --- FUNCIÓN DE INGENIERÍA DE CARACTERÍSTICAS (MEJORADA CON ENERGÍA GIROSCÓPICA) ---
 def extract_features(data):
     """
-    Calcula la media, STD, Varianza, IQR, RMS, y Ángulos (Roll/Pitch) de los ejes.
+    Calcula todas las métricas, incluyendo la Energía del Giroscopio y la Inclinación.
     """
     features = {}
     data_df = pd.DataFrame(data, columns=SENSOR_COLS)
     
-    # 1. CARACTERÍSTICAS DERIVADAS (Amplitud y Forma del Gesto)
+    # 1. CARACTERÍSTICAS DERIVADAS
+    
+    # Energía/Velocidad Angular Total (CLAVE: Mide la velocidad del movimiento)
+    data_df['Gyro_Mag'] = np.sqrt(data_df['Gyro_X']**2 + data_df['Gyro_Y']**2 + data_df['Gyro_Z']**2)
+    
+    # Energía/Fuerza de Aceleración Total
     data_df['Acc_Mag'] = np.sqrt(data_df['Acc_X']**2 + data_df['Acc_Y']**2 + data_df['Acc_Z']**2)
+    
+    # Aproximación de Ángulo (Inclinación)
     data_df['Roll'] = np.arctan2(data_df['Acc_Y'], data_df['Acc_Z']) * 180 / np.pi
     data_df['Pitch'] = np.arctan2(-data_df['Acc_X'], np.sqrt(data_df['Acc_Y']**2 + data_df['Acc_Z']**2)) * 180 / np.pi
 
-    ALL_COLS = SENSOR_COLS + ['Acc_Mag', 'Roll', 'Pitch']
+    # Incluimos los 6 originales + las 4 características derivadas
+    ALL_COLS = SENSOR_COLS + ['Gyro_Mag', 'Acc_Mag', 'Roll', 'Pitch']
     
     for col in ALL_COLS:
         # Medidas Básicas
@@ -53,7 +61,7 @@ def extract_features(data):
         Q3 = data_df[col].quantile(0.75)
         features[f'{col}_iqr'] = Q3 - Q1
         
-        # Medida de Energía
+        # Medida de Energía/RMS
         features[f'{col}_rms'] = np.sqrt(np.mean(data_df[col]**2))
         
     return pd.Series(features)
@@ -145,7 +153,7 @@ def train_model(csv_file):
     accuracy = model.score(X_scaled, y_combined)
     
     print("\n" + "="*60)
-    print("¡ENTRENAMIENTO COMPLETADO Y OPTIMIZADO PARA HECHIZOS!")
+    print("¡ENTRENAMIENTO COMPLETADO Y OPTIMIZADO PARA VELOCIDAD!")
     print(f"Precisión General: {accuracy:.4f}")
     print(f"Archivos guardados: '{MODEL_PATH}' y '{SCALER_PATH}'")
     print(f"El umbral de detección es CONFIDENCE_THRESHOLD={CONFIDENCE_THRESHOLD}. El modelo es ESTRICTO.")
@@ -193,7 +201,6 @@ def run_detector(serial_port, baud_rate):
                         # 1. ACTUALIZAR VENTANA MÓVIL (BUFFER)
                         realtime_buffer.append(sensor_values)
                         
-                        # Mantenemos el buffer al tamaño máximo
                         if len(realtime_buffer) > WINDOW_SIZE:
                             realtime_buffer = realtime_buffer[-WINDOW_SIZE:] 
                         
@@ -212,40 +219,35 @@ def run_detector(serial_port, baud_rate):
                             X_test_scaled = scaler.transform(X_test)
                             
                             probabilities = model.predict_proba(X_test_scaled)[0]
-                            current_confidence = probabilities[1] # Probabilidad de Gesto (Clase 1)
-
+                            current_confidence = probabilities[1] 
+                            
                             # 5. ACTUALIZAR HISTORIAL DE CONFIANZA DE LA SECUENCIA
                             if is_active:
                                 confidence_history.append(current_confidence)
                             else:
-                                # Si no hay actividad, la confianza del gesto es 0 en este punto de la secuencia
                                 confidence_history.append(0.0) 
                             
-                            # Mantener el buffer al tamaño de la secuencia
                             if len(confidence_history) > SEQUENCE_LENGTH:
                                 confidence_history = confidence_history[-SEQUENCE_LENGTH:]
                             
-                            # 6. EVALUACIÓN FINAL: ¿La secuencia completa es lo suficientemente similar (95%)?
+                            # 6. EVALUACIÓN FINAL: Detección de Secuencia Completa (95%)
                             mean_sequence_confidence = 0.0
                             if len(confidence_history) == SEQUENCE_LENGTH:
                                 mean_sequence_confidence = np.mean(confidence_history)
                                 
-                                # Condición Final: La secuencia completa debe ser >= 95% de coincidencia
                                 if mean_sequence_confidence >= CONFIDENCE_THRESHOLD:
                                     print(f"\n\n🎉 GESTO DETECTADO: [HECHIZO VÁLIDO] (Secuencia Confianza Media: {mean_sequence_confidence:.2f})")
                                     
-                                    # Deslizar ventana y resetear el historial de confianza para evitar detecciones inmediatas
+                                    # Deslizar ventana y resetear el historial de confianza
                                     realtime_buffer = realtime_buffer[STEP_SIZE:]
                                     confidence_history = [0.0] * (SEQUENCE_LENGTH - 1) 
                                     
                                 else:
-                                    # Mostrar el estado actual de la secuencia
                                     sys.stdout.write(f"\rAnalizando... Confianza Secuencia: {mean_sequence_confidence:.2f} | Actividad Gyro: {gyro_activity:.3f} (Esperando hechizo...)")
                                     sys.stdout.flush()
-                                    realtime_buffer = realtime_buffer[STEP_SIZE:] # Deslizar para la siguiente ventana
+                                    realtime_buffer = realtime_buffer[STEP_SIZE:] 
                             
                             else:
-                                # Si aún estamos cargando la historia, solo deslizamos
                                 sys.stdout.write(f"\rCargando secuencia de confianza: {len(confidence_history)}/{SEQUENCE_LENGTH}...")
                                 sys.stdout.flush()
                                 realtime_buffer = realtime_buffer[STEP_SIZE:]
@@ -268,8 +270,7 @@ def run_detector(serial_port, baud_rate):
 # --- FASE 3: RECOLECCIÓN DE DATOS (collect) ---
 def collect_data(output_file, repetitions, serial_port, baud_rate):
     """
-    Conecta al ESP32, lee los datos crudos y los guarda en un CSV, 
-    controlando cada repetición con la tecla ENTER para START/STOP.
+    Controla la recolección con ENTER para START y Ctrl+C para STOP.
     """
     print(f"📡 Intentando conectar a {serial_port} @ {baud_rate}...")
     try:
@@ -313,7 +314,6 @@ def collect_data(output_file, repetitions, serial_port, baud_rate):
                     time.sleep(0.01)
                     
             except KeyboardInterrupt:
-                # Sale del bucle de grabación
                 pass
             
             # 3. DETENCIÓN: Pide ENTER para confirmar y volver al reposo.
