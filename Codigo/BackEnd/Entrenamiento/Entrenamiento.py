@@ -22,31 +22,44 @@ STEP_SIZE = 20      # Evalúa cada 1.0 segundo (Solapamiento)
 realtime_buffer = []
 
 # --- UMBRALES DE ROBUSTEZ (AJUSTADOS PARA SER MÁS ESTRICTOS) ---
-CONFIDENCE_THRESHOLD = 0.95 # <--- Aumentado: Confianza mínima del modelo (Necesita ser casi perfecta)
-ACTIVITY_THRESHOLD = 0.05   # Desviación Estándar mínima en Accel Z para considerarse movimiento
+CONFIDENCE_THRESHOLD = 0.95 # Confianza mínima del modelo (Requiere alta precisión del gesto)
+ACTIVITY_THRESHOLD = 0.10   # <--- Aumentado: Actividad mínima del Giroscopio para 'encender' el detector.
 
-# --- FUNCIÓN DE INGENIERÍA DE CARACTERÍSTICAS ---
+# --- FUNCIÓN DE INGENIERÍA DE CARACTERÍSTICAS (MEJORADA PARA INCLINACIÓN Y AMPLITUD) ---
 def extract_features(data):
     """
-    Calcula la media, desviación estándar, min, max, varianza, IQR y Energía (RMS) de los 6 ejes.
+    Calcula la media, STD, Varianza, IQR, RMS, y Ángulos (Roll/Pitch) de los ejes.
     """
     features = {}
     data_df = pd.DataFrame(data, columns=SENSOR_COLS)
     
-    for col in SENSOR_COLS:
-        # 1. ESTADÍSTICAS BÁSICAS
+    # 1. CARACTERÍSTICAS DERIVADAS (Amplitud y Forma del Gesto)
+    
+    # Vector de Aceleración Total (Energía)
+    data_df['Acc_Mag'] = np.sqrt(data_df['Acc_X']**2 + data_df['Acc_Y']**2 + data_df['Acc_Z']**2)
+    
+    # Aproximación de Ángulo (Inclinación de la Varita - Énfasis en X e Y)
+    # Roll (X): atan2(Acc_Y, Acc_Z)
+    data_df['Roll'] = np.arctan2(data_df['Acc_Y'], data_df['Acc_Z']) * 180 / np.pi
+    # Pitch (Y): atan2(-Acc_X, sqrt(Acc_Y^2 + Acc_Z^2))
+    data_df['Pitch'] = np.arctan2(-data_df['Acc_X'], np.sqrt(data_df['Acc_Y']**2 + data_df['Acc_Z']**2)) * 180 / np.pi
+
+    # --- Generación de Features ---
+    # Incluimos los 6 sensores originales + las 3 características derivadas
+    ALL_COLS = SENSOR_COLS + ['Acc_Mag', 'Roll', 'Pitch']
+    
+    for col in ALL_COLS:
+        # Medidas Básicas
         features[f'{col}_mean'] = data_df[col].mean()
         features[f'{col}_std'] = data_df[col].std() 
-        features[f'{col}_max'] = data_df[col].max()
-        features[f'{col}_min'] = data_df[col].min()
         
-        # 2. MEDIDAS DE DISPERSIÓN (AMPLITUD)
+        # Medidas de Amplitud (Clave para gestos amplios)
         features[f'{col}_var'] = data_df[col].var()
         Q1 = data_df[col].quantile(0.25)
         Q3 = data_df[col].quantile(0.75)
         features[f'{col}_iqr'] = Q3 - Q1
         
-        # 3. ENERGÍA / INTENSIDAD (FUERZA/VELOCIDAD)
+        # Medida de Energía
         features[f'{col}_rms'] = np.sqrt(np.mean(data_df[col]**2))
         
     return pd.Series(features)
@@ -84,11 +97,10 @@ def train_model(csv_file):
     # --- 2. Generar Muestras de Reposo (Clase 0) a partir del propio CSV ---
     print("⏳ Generando datos de Reposo (Clase 0) basados en tu propio CSV...")
     
-    # Asumimos que el 10% de los datos con menor movimiento son representativos del reposo.
+    # Calcular estadísticas medias para generar un reposo realista
     df_gesture['Activity_Metric'] = df_gesture[SENSOR_COLS].std(axis=1)
     df_rest_candidate = df_gesture.sort_values(by='Activity_Metric').head(int(len(df_gesture) * 0.1))
 
-    # Si no hay datos, usamos un reposo sintético general (fallback)
     if df_rest_candidate.empty:
         mean_acc_z = 9.81
     else:
@@ -143,10 +155,10 @@ def train_model(csv_file):
     accuracy = model.score(X_scaled, y_combined)
     
     print("\n" + "="*60)
-    print("¡ENTRENAMIENTO COMPLETADO Y OPTIMIZADO PARA GESTOS AMPLIOS!")
+    print("¡ENTRENAMIENTO COMPLETADO Y OPTIMIZADO PARA HECHIZOS!")
     print(f"Precisión General: {accuracy:.4f}")
     print(f"Archivos guardados: '{MODEL_PATH}' y '{SCALER_PATH}'")
-    print("El umbral de detección es CONFIDENCE_THRESHOLD={CONFIDENCE_THRESHOLD}. El modelo es ESTRICTO.")
+    print(f"El umbral de detección es CONFIDENCE_THRESHOLD={CONFIDENCE_THRESHOLD}. El modelo es ESTRICTO.")
     print("="*60)
     return True
 
@@ -202,9 +214,10 @@ def run_detector(serial_port, baud_rate):
                             
                             # 3. APLICAR GESTIÓN DE ROBUSTEZ Y UMBRALES
                             
-                            # Condición A: Verificar Actividad Mínima (Interruptor)
-                            acc_z_std = window_data['Acc_Z'].std()
-                            is_active = acc_z_std > ACTIVITY_THRESHOLD
+                            # Condición A: Verificar Actividad Mínima (INTERRUPTOR ESTRICO)
+                            # Se usa la STD del Gyroscopio (X, Y, Z) para exigir rotación/movimiento en los 2 segundos de ventana
+                            gyro_activity = (window_data['Gyro_X'].std() + window_data['Gyro_Y'].std() + window_data['Gyro_Z'].std()) / 3
+                            is_active = gyro_activity > ACTIVITY_THRESHOLD
                             
                             # 4. PREDICCIÓN CON CONFIANZA
                             X_test = current_features.to_frame().T
@@ -221,7 +234,7 @@ def run_detector(serial_port, baud_rate):
                                 realtime_buffer = realtime_buffer[STEP_SIZE:]
                             
                             else:
-                                sys.stdout.write(f"\rAnalizando... Actividad: {acc_z_std:.3f} | Confianza Gesto: {confidence:.2f} (Esperando hechizo...)")
+                                sys.stdout.write(f"\rAnalizando... Actividad Gyro: {gyro_activity:.3f} | Confianza Gesto: {confidence:.2f} (Esperando hechizo...)")
                                 sys.stdout.flush()
 
                     except ValueError:
@@ -239,7 +252,7 @@ def run_detector(serial_port, baud_rate):
     ser.close()
     print("Conexión serial cerrada.")
 
-# --- FASE 3: RECOLECCIÓN DE DATOS (collect) - MODIFICADA PARA REPETICIONES ---
+# --- FASE 3: RECOLECCIÓN DE DATOS (collect) ---
 def collect_data(output_file, repetitions, samples_per_rep, serial_port, baud_rate):
     """
     Conecta al ESP32, lee los datos crudos y los guarda en un CSV por iteraciones.
@@ -255,7 +268,6 @@ def collect_data(output_file, repetitions, samples_per_rep, serial_port, baud_ra
         print("Asegúrate de que el puerto sea correcto y el ESP32 esté conectado.")
         return
 
-    total_samples_needed = repetitions * samples_per_rep
     data_count = 0
     
     with open(output_file, 'w') as f:
@@ -263,7 +275,7 @@ def collect_data(output_file, repetitions, samples_per_rep, serial_port, baud_ra
         print(f"\n📢 Comienza la recolección. Objetivo: {repetitions} repeticiones de {samples_per_rep} muestras cada una.")
         
         for rep in range(1, repetitions + 1):
-            input(f"\n---> PREPARADO para Repetición {rep}/{repetitions}. Presiona ENTER para INICIAR el HECHIZO...")
+            input(f"\n---> PREPARADO para Repetición {rep}/{repetitions}. Presiona ENTER para INICIAR el HECHIZO (Movimiento AMPLIO)...")
             
             samples_collected_in_rep = 0
             
@@ -305,12 +317,10 @@ if __name__ == "__main__":
         print("3. Para DETECTAR MOVIMIENTO: python Entrenamiento.py detect <PUERTO> <BAUD_RATE>")
         
         print("\nEjemplo de ADQUISICIÓN: python Entrenamiento.py collect mi_hechizo.csv /dev/ttyUSB0 10 40")
-        print("   (Esto graba 10 repeticiones de 40 muestras/2 segundos cada una.)")
         print("Ejemplo de ENTRENAMIENTO: python Entrenamiento.py train mi_hechizo.csv")
         print("Ejemplo de DETECCIÓN: python Entrenamiento.py detect /dev/ttyUSB0 115200")
         
     elif sys.argv[1] == 'collect' and len(sys.argv) >= 6:
-        # collect <salida.csv> <PUERTO> <REPETICIONES> <MUESTRAS_POR_REP>
         output = sys.argv[2]
         port = sys.argv[3]
         repetitions = int(sys.argv[4])
