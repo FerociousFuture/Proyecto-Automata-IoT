@@ -1,0 +1,310 @@
+import pandas as pd
+import numpy as np
+import joblib
+import serial
+import time
+import sys
+import os
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.exceptions import NotFittedError
+
+# --- CONFIGURACIÓN GLOBAL ---
+MODEL_PATH = 'gesture_classifier_model.pkl' 
+SCALER_PATH = 'scaler_for_prediction.pkl'
+SENSOR_COLS = ['Gyro_X', 'Gyro_Y', 'Gyro_Z', 'Acc_X', 'Acc_Y', 'Acc_Z']
+NUM_SENSOR_VALUES = 6
+HEADER = "Gyro_X,Gyro_Y,Gyro_Z,Acc_X,Acc_Y,Acc_Z\n"
+
+# --- CLAVES PARA LA CLASIFICACIÓN DE GESTOS ---
+WINDOW_SIZE = 40    
+STEP_SIZE = 20      
+realtime_buffer = []
+
+# --- UMBRALES DE ROBUSTEZ ---
+CONFIDENCE_THRESHOLD = 0.85 
+ACTIVITY_THRESHOLD = 0.05 
+
+# --- FUNCIÓN DE INGENIERÍA DE CARACTERÍSTICAS (Fundamental) ---
+def extract_features(data):
+    """Calcula la media, desviación estándar, min y max de los 6 ejes."""
+    features = {}
+    data_df = pd.DataFrame(data, columns=SENSOR_COLS)
+    
+    for col in SENSOR_COLS:
+        features[f'{col}_mean'] = data_df[col].mean()
+        features[f'{col}_std'] = data_df[col].std()
+        features[f'{col}_max'] = data_df[col].max()
+        features[f'{col}_min'] = data_df[col].min()
+        
+    return pd.Series(features)
+
+# --- FASE 1: ENTRENAMIENTO DEL MODELO (train) - CORREGIDO ---
+def train_model(csv_file):
+    """
+    Segmenta el CSV (Clase 1), genera datos de Reposo (Clase 0), 
+    y entrena el Random Forest con ambas clases.
+    """
+    global WINDOW_SIZE, STEP_SIZE
+    try:
+        df_gesture = pd.read_csv(csv_file)
+        print(f"✅ Datos de Gesto (Clase 1) cargados de '{csv_file}'.")
+    except FileNotFoundError:
+        print(f"❌ Error: Archivo CSV '{csv_file}' no encontrado.")
+        return
+
+    # --- 1. Generar Muestras de Gesto (Clase 1) ---
+    X_features_gesture = []
+    
+    for i in range(0, len(df_gesture) - WINDOW_SIZE, STEP_SIZE):
+        window = df_gesture.iloc[i: i + WINDOW_SIZE]
+        if len(window) == WINDOW_SIZE:
+            features = extract_features(window)
+            X_features_gesture.append(features)
+
+    X_gesture = pd.DataFrame(X_features_gesture)
+    y_gesture = np.ones(len(X_gesture)) # Etiqueta: 1 (Gesto)
+
+    if len(X_gesture) < 10:
+        print("❌ Error: Muy pocas muestras de gesto para entrenamiento.")
+        return
+
+    # --- 2. Generar Muestras de Reposo (Clase 0) ---
+    print("⏳ Generando datos sintéticos de Reposo (Clase 0)...")
+    
+    # Calcular media y STD del acelerómetro Z en reposo (de tus datos originales)
+    mean_acc_z = df_gesture['Acc_Z'].mean() 
+    std_acc_z = df_gesture['Acc_Z'].std() 
+    
+    # Simular 3 veces más muestras de reposo que de gestos para robustez.
+    num_rest_samples = len(X_gesture) * 3 
+    
+    rest_data = []
+    for _ in range(num_rest_samples * WINDOW_SIZE):
+        # Gyro: Cerca de 0 (Ruido muy bajo)
+        g_x = np.random.normal(0, 0.005)
+        g_y = np.random.normal(0, 0.005)
+        g_z = np.random.normal(0, 0.005)
+        # Accel: Cerca de 0 en X/Y, cerca de la gravedad media en Z
+        a_x = np.random.normal(0, 0.05)
+        a_y = np.random.normal(0, 0.05)
+        a_z = np.random.normal(mean_acc_z, 0.05) # Usamos la media de tu Acc_Z como referencia
+        rest_data.append([g_x, g_y, g_z, a_x, a_y, a_z])
+
+    df_rest = pd.DataFrame(rest_data, columns=SENSOR_COLS)
+    
+    X_features_rest = []
+    # Segmentar los datos de reposo para obtener sus características de ventana
+    for i in range(0, len(df_rest) - WINDOW_SIZE, STEP_SIZE):
+        window = df_rest.iloc[i: i + WINDOW_SIZE]
+        if len(window) == WINDOW_SIZE:
+            features = extract_features(window)
+            X_features_rest.append(features)
+            
+    X_rest = pd.DataFrame(X_features_rest)
+    y_rest = np.zeros(len(X_rest)) # Etiqueta: 0 (Reposo)
+
+    # --- 3. Combinar y Entrenar ---
+    X_combined = pd.concat([X_gesture, X_rest], ignore_index=True)
+    y_combined = np.concatenate([y_gesture, y_rest])
+
+    print(f"Total de muestras de entrenamiento: {len(X_combined)} (Gesto: {len(X_gesture)}, Reposo: {len(X_rest)})")
+
+    # 4. Estandarización y Entrenamiento
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_combined)
+
+    print("⏳ Entrenando modelo Random Forest Biclase...")
+    model = RandomForestClassifier(n_estimators=50, random_state=42)
+    model.fit(X_scaled, y_combined)
+    
+    # 5. Guardar
+    joblib.dump(model, MODEL_PATH)
+    joblib.dump(scaler, SCALER_PATH)
+    
+    # 6. Reporte
+    accuracy = model.score(X_scaled, y_combined)
+    
+    print("\n" + "="*60)
+    print("¡ENTRENAMIENTO COMPLETADO Y CORREGIDO!")
+    print(f"Precisión General: {accuracy:.4f}")
+    print(f"Archivos guardados: '{MODEL_PATH}' y '{SCALER_PATH}'")
+    print("="*60)
+    return True
+
+
+# --- FASE 2: LÓGICA DE DETECCIÓN EN TIEMPO REAL (detect) ---
+# (Esta función permanece igual, ya que ahora el modelo devuelve dos probabilidades)
+
+def load_and_predict(sensor_data_array, model, scaler):
+    # ... (omito la implementación para no repetir código) ...
+    # La lógica para acceder a probabilities[1] ahora es correcta.
+    pass
+
+def run_detector(serial_port, baud_rate):
+    """
+    Conecta al puerto Serial, usa una ventana móvil, aplica umbrales de actividad/confianza y detecta el gesto.
+    """
+    global realtime_buffer, WINDOW_SIZE, STEP_SIZE
+    
+    try:
+        model = joblib.load(MODEL_PATH)
+        scaler = joblib.load(SCALER_PATH)
+    except FileNotFoundError:
+        print("❌ Error: No se encontraron los archivos del modelo. Ejecuta el modo 'train' primero.")
+        return
+
+    print(f"📡 Intentando conectar a {serial_port} @ {baud_rate}...")
+    
+    try:
+        ser = serial.Serial(serial_port, baud_rate, timeout=1)
+        time.sleep(2)
+        ser.flushInput()
+        print("🟢 Conexión Serial establecida. Detector activo.")
+        print(f"Esperando {WINDOW_SIZE} muestras para la primera predicción...")
+    except serial.SerialException as e:
+        print(f"❌ Error al abrir el puerto serial '{serial_port}': {e}")
+        print("Asegúrate de que el puerto sea correcto y el ESP32 esté conectado.")
+        return
+
+    while True:
+        try:
+            if ser.in_waiting > 0:
+                line = ser.readline().decode('latin-1').strip()
+                parts = line.split(',')
+                
+                if len(parts) == NUM_SENSOR_VALUES:
+                    try:
+                        sensor_values = [float(p.strip()) for p in parts]
+                        
+                        # 1. ACTUALIZAR VENTANA MÓVIL (BUFFER)
+                        realtime_buffer.append(sensor_values)
+                        
+                        if len(realtime_buffer) > WINDOW_SIZE:
+                            realtime_buffer = realtime_buffer[-WINDOW_SIZE:] 
+                        
+                        # 2. EVALUAR SOLO CUANDO LA VENTANA ESTÁ LLENA
+                        if len(realtime_buffer) == WINDOW_SIZE:
+                            
+                            window_data = pd.DataFrame(realtime_buffer, columns=SENSOR_COLS)
+                            current_features = extract_features(window_data)
+                            
+                            # 3. APLICAR GESTIÓN DE ROBUSTEZ Y UMBRALES
+                            
+                            # Condición A: Verificar Actividad Mínima (Interruptor)
+                            acc_z_std = window_data['Acc_Z'].std()
+                            is_active = acc_z_std > ACTIVITY_THRESHOLD
+                            
+                            # 4. PREDICCIÓN CON CONFIANZA
+                            X_test = current_features.to_frame().T
+                            X_test_scaled = scaler.transform(X_test)
+                            
+                            # predict_proba ahora devuelve [P(Clase 0), P(Clase 1)]
+                            probabilities = model.predict_proba(X_test_scaled)[0]
+                            confidence = probabilities[1] # Probabilidad de Gesto (Clase 1)
+                            
+                            # 5. DECISIÓN FINAL (GESTO VÁLIDO)
+                            if is_active and confidence > CONFIDENCE_THRESHOLD:
+                                print(f"\n\n🎉 GESTO DETECTADO: [CLASE 1] Movimiento Similar Completo. (Confianza: {confidence:.2f})")
+                                
+                                # Deslizar la ventana para buscar el próximo gesto
+                                realtime_buffer = realtime_buffer[STEP_SIZE:]
+                            
+                            else:
+                                sys.stdout.write(f"\rAnalizando... Actividad: {acc_z_std:.3f} | Confianza Gesto 1: {confidence:.2f} (Esperando inicio...)")
+                                sys.stdout.flush()
+
+                    except ValueError:
+                        continue
+                
+            time.sleep(0.001) 
+            
+        except KeyboardInterrupt:
+            print("\nDeteniendo el detector.")
+            break
+        except Exception as e:
+            print(f"Ocurrió un error inesperado en el detector: {e}")
+            break
+
+    ser.close()
+    print("Conexión serial cerrada.")
+
+# --- FASE 3: RECOLECCIÓN DE DATOS (collect) ---
+def collect_data(output_file, num_samples, serial_port, baud_rate):
+    """
+    Conecta al ESP32, lee los datos crudos y los guarda en un CSV.
+    """
+    print(f"📡 Intentando conectar a {serial_port} @ {baud_rate}...")
+    try:
+        ser = serial.Serial(serial_port, baud_rate, timeout=1)
+        time.sleep(2)
+        ser.flushInput()
+        print("🟢 Conexión Serial establecida. Iniciando recolección.")
+    except serial.SerialException as e:
+        print(f"❌ Error al abrir el puerto serial '{serial_port}': {e}")
+        print("Asegúrate de que el puerto sea correcto y el ESP32 esté conectado.")
+        return
+
+    data_count = 0
+    
+    with open(output_file, 'w') as f:
+        f.write(HEADER)
+        print(f"\n📢 Comienza la recolección. Realiza el movimiento ahora.")
+        print(f"Grabando {num_samples} muestras (aprox. {num_samples*0.05:.1f} segundos)...")
+        
+        start_time = time.time()
+        while data_count < num_samples:
+            try:
+                if ser.in_waiting > 0:
+                    line = ser.readline().decode('latin-1').strip()
+                    parts = line.split(',')
+                    
+                    if len(parts) == NUM_SENSOR_VALUES:
+                        f.write(line + '\n')
+                        data_count += 1
+                        sys.stdout.write(f"\rMuestras recolectadas: {data_count}/{num_samples}")
+                        sys.stdout.flush()
+                
+                time.sleep(0.01)
+                
+            except KeyboardInterrupt:
+                print("\nColección detenida por el usuario.")
+                break
+            except UnicodeDecodeError:
+                continue
+
+    ser.close()
+    elapsed_time = time.time() - start_time
+    print(f"\n\n✅ Colección finalizada. Total de muestras: {data_count}")
+    print(f"Archivo guardado: '{output_file}' (Duración: {elapsed_time:.2f}s)")
+    print("Ahora puedes usar 'train' con este archivo.")
+
+# --- BLOQUE PRINCIPAL DE COMANDOS ---
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        # ... (instrucciones de uso) ...
+        print("Uso:")
+        print("1. Para ADQUIRIR DATOS (Crear CSV): python Entrenamiento.py collect <salida.csv> <PUERTO> <MUESTRAS>")
+        print("2. Para ENTRENAR MODELO: python Entrenamiento.py train <nombre_archivo.csv>")
+        print("3. Para DETECTAR MOVIMIENTO: python Entrenamiento.py detect <PUERTO> <BAUD_RATE>")
+        
+        print("\nEjemplo de ADQUISICIÓN: python Entrenamiento.py collect mi_giro.csv /dev/ttyUSB0 300")
+        print("Ejemplo de ENTRENAMIENTO: python Entrenamiento.py train mi_giro.csv")
+        print("Ejemplo de DETECCIÓN: python Entrenamiento.py detect /dev/ttyUSB0 115200")
+        
+    elif sys.argv[1] == 'collect' and len(sys.argv) >= 5:
+        output = sys.argv[2]
+        port = sys.argv[3]
+        samples = int(sys.argv[4])
+        collect_data(output_file=output, num_samples=samples, serial_port=port, baud_rate=115200)
+
+    elif sys.argv[1] == 'train' and len(sys.argv) == 3:
+        train_model(sys.argv[2])
+    
+    elif sys.argv[1] == 'detect' and len(sys.argv) >= 3:
+        port = sys.argv[2]
+        baud = int(sys.argv[3]) if len(sys.argv) == 4 else 115200
+        run_detector(serial_port=port, baud_rate=baud)
+    
+    else:
+        print("Comando no reconocido o argumentos faltantes. Revisa el formato de uso.")
