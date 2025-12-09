@@ -17,13 +17,15 @@ NUM_SENSOR_VALUES = 6
 HEADER = "Gyro_X,Gyro_Y,Gyro_Z,Acc_X,Acc_Y,Acc_Z\n"
 
 # --- CLAVES PARA LA CLASIFICACIÓN DE GESTOS ---
-WINDOW_SIZE = 40    # 2.0 segundos de ventana (Longitud del gesto)
+WINDOW_SIZE = 40    # 2.0 segundos de ventana de análisis (Longitud del gesto)
 STEP_SIZE = 20      # Evalúa cada 1.0 segundo (Solapamiento)
 realtime_buffer = []
 
-# --- UMBRALES DE ROBUSTEZ ---
-CONFIDENCE_THRESHOLD = 0.95 
+# --- UMBRALES DE ROBUSTEZ (Detección por Secuencia) ---
+CONFIDENCE_THRESHOLD = 0.95 # <--- Requisito de Confianza MEDIA de la secuencia (95% de match)
 ACTIVITY_THRESHOLD = 0.10   
+SEQUENCE_LENGTH = 5         # <--- Longitud de la secuencia a evaluar (5 ventanas = 5 segundos)
+confidence_history = []     # Buffer para almacenar las confianzas de las últimas 5 ventanas
 
 # --- FUNCIÓN DE INGENIERÍA DE CARACTERÍSTICAS ---
 def extract_features(data):
@@ -156,7 +158,7 @@ def run_detector(serial_port, baud_rate):
     """
     Conecta al puerto Serial, usa una ventana móvil, aplica umbrales de actividad/confianza y detecta el gesto.
     """
-    global realtime_buffer, WINDOW_SIZE, STEP_SIZE
+    global realtime_buffer, WINDOW_SIZE, STEP_SIZE, confidence_history
     
     try:
         model = joblib.load(MODEL_PATH)
@@ -172,7 +174,7 @@ def run_detector(serial_port, baud_rate):
         time.sleep(2)
         ser.flushInput()
         print("🟢 Conexión Serial establecida. Detector activo.")
-        print(f"Esperando {WINDOW_SIZE} muestras para la primera predicción...")
+        print(f"Esperando {WINDOW_SIZE} muestras para la primera ventana de análisis...")
     except serial.SerialException as e:
         print(f"❌ Error al abrir el puerto serial '{serial_port}': {e}")
         print("Asegúrate de que el puerto sea correcto y el ESP32 esté conectado.")
@@ -191,6 +193,7 @@ def run_detector(serial_port, baud_rate):
                         # 1. ACTUALIZAR VENTANA MÓVIL (BUFFER)
                         realtime_buffer.append(sensor_values)
                         
+                        # Mantenemos el buffer al tamaño máximo
                         if len(realtime_buffer) > WINDOW_SIZE:
                             realtime_buffer = realtime_buffer[-WINDOW_SIZE:] 
                         
@@ -200,9 +203,7 @@ def run_detector(serial_port, baud_rate):
                             window_data = pd.DataFrame(realtime_buffer, columns=SENSOR_COLS)
                             current_features = extract_features(window_data)
                             
-                            # 3. APLICAR GESTIÓN DE ROBUSTEZ Y UMBRALES
-                            
-                            # Condición A: Verificar Actividad Mínima (INTERRUPTOR ESTRICO)
+                            # 3. VERIFICACIÓN DE ACTIVIDAD (INTERRUPTOR ESTRICO)
                             gyro_activity = (window_data['Gyro_X'].std() + window_data['Gyro_Y'].std() + window_data['Gyro_Z'].std()) / 3
                             is_active = gyro_activity > ACTIVITY_THRESHOLD
                             
@@ -211,19 +212,44 @@ def run_detector(serial_port, baud_rate):
                             X_test_scaled = scaler.transform(X_test)
                             
                             probabilities = model.predict_proba(X_test_scaled)[0]
-                            confidence = probabilities[1] 
+                            current_confidence = probabilities[1] # Probabilidad de Gesto (Clase 1)
+
+                            # 5. ACTUALIZAR HISTORIAL DE CONFIANZA DE LA SECUENCIA
+                            if is_active:
+                                confidence_history.append(current_confidence)
+                            else:
+                                # Si no hay actividad, la confianza del gesto es 0 en este punto de la secuencia
+                                confidence_history.append(0.0) 
                             
-                            # 5. DECISIÓN FINAL (GESTO VÁLIDO)
-                            if is_active and confidence > CONFIDENCE_THRESHOLD:
-                                print(f"\n\n🎉 GESTO DETECTADO: [HECHIZO VÁLIDO] (Confianza: {confidence:.2f})")
+                            # Mantener el buffer al tamaño de la secuencia
+                            if len(confidence_history) > SEQUENCE_LENGTH:
+                                confidence_history = confidence_history[-SEQUENCE_LENGTH:]
+                            
+                            # 6. EVALUACIÓN FINAL: ¿La secuencia completa es lo suficientemente similar (95%)?
+                            mean_sequence_confidence = 0.0
+                            if len(confidence_history) == SEQUENCE_LENGTH:
+                                mean_sequence_confidence = np.mean(confidence_history)
                                 
-                                # Deslizar la ventana para buscar el próximo gesto
-                                realtime_buffer = realtime_buffer[STEP_SIZE:]
+                                # Condición Final: La secuencia completa debe ser >= 95% de coincidencia
+                                if mean_sequence_confidence >= CONFIDENCE_THRESHOLD:
+                                    print(f"\n\n🎉 GESTO DETECTADO: [HECHIZO VÁLIDO] (Secuencia Confianza Media: {mean_sequence_confidence:.2f})")
+                                    
+                                    # Deslizar ventana y resetear el historial de confianza para evitar detecciones inmediatas
+                                    realtime_buffer = realtime_buffer[STEP_SIZE:]
+                                    confidence_history = [0.0] * (SEQUENCE_LENGTH - 1) 
+                                    
+                                else:
+                                    # Mostrar el estado actual de la secuencia
+                                    sys.stdout.write(f"\rAnalizando... Confianza Secuencia: {mean_sequence_confidence:.2f} | Actividad Gyro: {gyro_activity:.3f} (Esperando hechizo...)")
+                                    sys.stdout.flush()
+                                    realtime_buffer = realtime_buffer[STEP_SIZE:] # Deslizar para la siguiente ventana
                             
                             else:
-                                sys.stdout.write(f"\rAnalizando... Actividad Gyro: {gyro_activity:.3f} | Confianza Gesto: {confidence:.2f} (Esperando hechizo...)")
+                                # Si aún estamos cargando la historia, solo deslizamos
+                                sys.stdout.write(f"\rCargando secuencia de confianza: {len(confidence_history)}/{SEQUENCE_LENGTH}...")
                                 sys.stdout.flush()
-
+                                realtime_buffer = realtime_buffer[STEP_SIZE:]
+                                
                     except ValueError:
                         continue
                 
@@ -239,7 +265,7 @@ def run_detector(serial_port, baud_rate):
     ser.close()
     print("Conexión serial cerrada.")
 
-# --- FASE 3: RECOLECCIÓN DE DATOS (collect) - MODIFICADA PARA START/STOP CON ENTER ---
+# --- FASE 3: RECOLECCIÓN DE DATOS (collect) ---
 def collect_data(output_file, repetitions, serial_port, baud_rate):
     """
     Conecta al ESP32, lee los datos crudos y los guarda en un CSV, 
@@ -265,36 +291,14 @@ def collect_data(output_file, repetitions, serial_port, baud_rate):
         for rep in range(1, repetitions + 1):
             
             # 1. INICIO: Espera el primer ENTER
-            input(f"\n---> PREPARADO para Repetición {rep}/{repetitions}. Presiona ENTER para INICIAR el HECHIZO...")
-            print("🔴 GRABANDO GESTO... Presiona ENTER de nuevo para DETENER la grabación.")
+            input(f"\n---> PREPARADO para Repetición {rep}/{repetitions}. Presiona ENTER para INICIAR el HECHIZO (Movimiento AMPLIO)...")
+            print("🔴 GRABANDO GESTO... Presiona Ctrl+C para DETENER la grabación.")
             
             samples_collected_in_rep = 0
             
-            # Configuramos una función de input no bloqueante (simulación simple)
-            # En Python estándar, la forma más limpia es usar un subproceso (no recomendado) 
-            # o el truco de la pausa. Usaremos la pausa y el try/except forzado.
-            
-            # Usaremos una variable de control y la interrumpiremos con una pausa forzada
-            # para simular el STOP sin librerías externas.
-            
             try:
-                # 2. GRABACIÓN: Bucle principal hasta que el usuario presione ENTER.
-                # Nota: Necesitamos un mecanismo de interrupción NO bloqueante, pero usaremos 
-                # KeyboardInterrupt (Ctrl+C) como el mecanismo estándar para salir del bucle.
-                # Dado que el usuario pidió ENTER, haremos la grabación hasta Ctrl+C y pediremos
-                # ENTER para pasar a la siguiente fase, manteniendo el flujo iterativo.
-                
-                # Para cumplir estrictamente el requisito de ENTER para STOP:
-                # La mejor manera es pedir al usuario que presione Ctrl+C y luego Enter para avanzar, 
-                # ya que no podemos leer el puerto Serial Y el input() simultáneamente de forma estándar.
-                
-                # Vamos a usar un bucle infinito y forzar al usuario a usar Ctrl+C para finalizar la repetición.
-                
-                input_stop = None # Usamos un input forzado para detener la grabación
-                
-                print("⚠️ NOTA: Presiona Ctrl+C (KeyboardInterrupt) para FINALIZAR la grabación de esta repetición.")
-                
-                while input_stop is None:
+                # 2. GRABACIÓN: Bucle principal hasta que el usuario presione Ctrl+C (KeyboardInterrupt)
+                while True:
                     if ser.in_waiting > 0:
                         line = ser.readline().decode('latin-1').strip()
                         parts = line.split(',')
@@ -329,12 +333,10 @@ if __name__ == "__main__":
         print("3. Para DETECTAR MOVIMIENTO: python Entrenamiento.py detect <PUERTO> <BAUD_RATE>")
         
         print("\nEjemplo de ADQUISICIÓN: python Entrenamiento.py collect mi_hechizo.csv /dev/ttyUSB0 10")
-        print("   (Esto graba 10 repeticiones de duración variable controladas por Ctrl+C.)")
         print("Ejemplo de ENTRENAMIENTO: python Entrenamiento.py train mi_hechizo.csv")
         print("Ejemplo de DETECCIÓN: python Entrenamiento.py detect /dev/ttyUSB0 115200")
         
     elif sys.argv[1] == 'collect' and len(sys.argv) >= 5:
-        # collect <salida.csv> <PUERTO> <REPETICIONES>
         output = sys.argv[2]
         port = sys.argv[3]
         repetitions = int(sys.argv[4])
