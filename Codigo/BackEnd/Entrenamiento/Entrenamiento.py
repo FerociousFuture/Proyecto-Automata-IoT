@@ -17,29 +17,41 @@ NUM_SENSOR_VALUES = 6
 HEADER = "Gyro_X,Gyro_Y,Gyro_Z,Acc_X,Acc_Y,Acc_Z\n"
 
 # --- CLAVES PARA LA CLASIFICACIÓN DE GESTOS ---
-WINDOW_SIZE = 40    
-STEP_SIZE = 20      
+WINDOW_SIZE = 40    # 2.0 segundos de ventana (Longitud del gesto)
+STEP_SIZE = 20      # Evalúa cada 1.0 segundo (Solapamiento)
 realtime_buffer = []
 
 # --- UMBRALES DE ROBUSTEZ ---
-CONFIDENCE_THRESHOLD = 0.85 
-ACTIVITY_THRESHOLD = 0.05 
+CONFIDENCE_THRESHOLD = 0.85 # Confianza mínima del modelo (0.0 a 1.0)
+ACTIVITY_THRESHOLD = 0.05   # Desviación Estándar mínima en Accel Z para considerarse movimiento
 
-# --- FUNCIÓN DE INGENIERÍA DE CARACTERÍSTICAS (Fundamental) ---
+# --- FUNCIÓN DE INGENIERÍA DE CARACTERÍSTICAS (MEJORADA PARA GESTOS AMPLIOS) ---
 def extract_features(data):
-    """Calcula la media, desviación estándar, min y max de los 6 ejes."""
+    """
+    Calcula la media, desviación estándar, min, max, varianza, IQR y Energía (RMS) de los 6 ejes.
+    """
     features = {}
     data_df = pd.DataFrame(data, columns=SENSOR_COLS)
     
     for col in SENSOR_COLS:
+        # 1. ESTADÍSTICAS BÁSICAS (Amplitud y Tendencia)
         features[f'{col}_mean'] = data_df[col].mean()
-        features[f'{col}_std'] = data_df[col].std()
+        features[f'{col}_std'] = data_df[col].std() 
         features[f'{col}_max'] = data_df[col].max()
         features[f'{col}_min'] = data_df[col].min()
         
+        # 2. MEDIDAS DE DISPERSIÓN (Varianza, IQR) -> Clave para la AMPLITUD
+        features[f'{col}_var'] = data_df[col].var()
+        Q1 = data_df[col].quantile(0.25)
+        Q3 = data_df[col].quantile(0.75)
+        features[f'{col}_iqr'] = Q3 - Q1
+        
+        # 3. ENERGÍA / INTENSIDAD (RMS) -> Clave para la VELOCIDAD/FUERZA
+        features[f'{col}_rms'] = np.sqrt(np.mean(data_df[col]**2))
+        
     return pd.Series(features)
 
-# --- FASE 1: ENTRENAMIENTO DEL MODELO (train) - CORREGIDO ---
+# --- FASE 1: ENTRENAMIENTO DEL MODELO (train) ---
 def train_model(csv_file):
     """
     Segmenta el CSV (Clase 1), genera datos de Reposo (Clase 0), 
@@ -63,38 +75,36 @@ def train_model(csv_file):
             X_features_gesture.append(features)
 
     X_gesture = pd.DataFrame(X_features_gesture)
-    y_gesture = np.ones(len(X_gesture)) # Etiqueta: 1 (Gesto)
+    y_gesture = np.ones(len(X_gesture)) 
 
     if len(X_gesture) < 10:
-        print("❌ Error: Muy pocas muestras de gesto para entrenamiento.")
+        print("❌ Error: Muy pocas muestras de gesto para entrenamiento. Graba al menos 10s de movimiento.")
         return
 
     # --- 2. Generar Muestras de Reposo (Clase 0) ---
     print("⏳ Generando datos sintéticos de Reposo (Clase 0)...")
     
-    # Calcular media y STD del acelerómetro Z en reposo (de tus datos originales)
+    # Usar las estadísticas de tu propio CSV para generar un reposo realista
     mean_acc_z = df_gesture['Acc_Z'].mean() 
-    std_acc_z = df_gesture['Acc_Z'].std() 
     
-    # Simular 3 veces más muestras de reposo que de gestos para robustez.
+    # Generamos 3 veces más datos de reposo para hacer el clasificador más robusto al "no-gesto"
     num_rest_samples = len(X_gesture) * 3 
     
     rest_data = []
     for _ in range(num_rest_samples * WINDOW_SIZE):
-        # Gyro: Cerca de 0 (Ruido muy bajo)
+        # Gyro: Cerca de 0 (solo ruido)
         g_x = np.random.normal(0, 0.005)
         g_y = np.random.normal(0, 0.005)
         g_z = np.random.normal(0, 0.005)
-        # Accel: Cerca de 0 en X/Y, cerca de la gravedad media en Z
+        # Accel: Ejes X/Y cerca de 0; Eje Z cerca de la gravedad media de tu sensor
         a_x = np.random.normal(0, 0.05)
         a_y = np.random.normal(0, 0.05)
-        a_z = np.random.normal(mean_acc_z, 0.05) # Usamos la media de tu Acc_Z como referencia
+        a_z = np.random.normal(mean_acc_z, 0.05) 
         rest_data.append([g_x, g_y, g_z, a_x, a_y, a_z])
 
     df_rest = pd.DataFrame(rest_data, columns=SENSOR_COLS)
     
     X_features_rest = []
-    # Segmentar los datos de reposo para obtener sus características de ventana
     for i in range(0, len(df_rest) - WINDOW_SIZE, STEP_SIZE):
         window = df_rest.iloc[i: i + WINDOW_SIZE]
         if len(window) == WINDOW_SIZE:
@@ -102,7 +112,7 @@ def train_model(csv_file):
             X_features_rest.append(features)
             
     X_rest = pd.DataFrame(X_features_rest)
-    y_rest = np.zeros(len(X_rest)) # Etiqueta: 0 (Reposo)
+    y_rest = np.zeros(len(X_rest)) 
 
     # --- 3. Combinar y Entrenar ---
     X_combined = pd.concat([X_gesture, X_rest], ignore_index=True)
@@ -126,7 +136,7 @@ def train_model(csv_file):
     accuracy = model.score(X_scaled, y_combined)
     
     print("\n" + "="*60)
-    print("¡ENTRENAMIENTO COMPLETADO Y CORREGIDO!")
+    print("¡ENTRENAMIENTO COMPLETADO Y OPTIMIZADO PARA GESTOS GRANDES!")
     print(f"Precisión General: {accuracy:.4f}")
     print(f"Archivos guardados: '{MODEL_PATH}' y '{SCALER_PATH}'")
     print("="*60)
@@ -134,12 +144,6 @@ def train_model(csv_file):
 
 
 # --- FASE 2: LÓGICA DE DETECCIÓN EN TIEMPO REAL (detect) ---
-# (Esta función permanece igual, ya que ahora el modelo devuelve dos probabilidades)
-
-def load_and_predict(sensor_data_array, model, scaler):
-    # ... (omito la implementación para no repetir código) ...
-    # La lógica para acceder a probabilities[1] ahora es correcta.
-    pass
 
 def run_detector(serial_port, baud_rate):
     """
@@ -199,19 +203,18 @@ def run_detector(serial_port, baud_rate):
                             X_test = current_features.to_frame().T
                             X_test_scaled = scaler.transform(X_test)
                             
-                            # predict_proba ahora devuelve [P(Clase 0), P(Clase 1)]
                             probabilities = model.predict_proba(X_test_scaled)[0]
                             confidence = probabilities[1] # Probabilidad de Gesto (Clase 1)
                             
                             # 5. DECISIÓN FINAL (GESTO VÁLIDO)
                             if is_active and confidence > CONFIDENCE_THRESHOLD:
-                                print(f"\n\n🎉 GESTO DETECTADO: [CLASE 1] Movimiento Similar Completo. (Confianza: {confidence:.2f})")
+                                print(f"\n\n🎉 GESTO DETECTADO: [HECHIZO VÁLIDO] (Confianza: {confidence:.2f})")
                                 
                                 # Deslizar la ventana para buscar el próximo gesto
                                 realtime_buffer = realtime_buffer[STEP_SIZE:]
                             
                             else:
-                                sys.stdout.write(f"\rAnalizando... Actividad: {acc_z_std:.3f} | Confianza Gesto 1: {confidence:.2f} (Esperando inicio...)")
+                                sys.stdout.write(f"\rAnalizando... Actividad: {acc_z_std:.3f} | Confianza Gesto: {confidence:.2f} (Esperando hechizo...)")
                                 sys.stdout.flush()
 
                     except ValueError:
@@ -249,7 +252,7 @@ def collect_data(output_file, num_samples, serial_port, baud_rate):
     
     with open(output_file, 'w') as f:
         f.write(HEADER)
-        print(f"\n📢 Comienza la recolección. Realiza el movimiento ahora.")
+        print(f"\n📢 Comienza la recolección. Realiza el movimiento ahora (Hechizo).")
         print(f"Grabando {num_samples} muestras (aprox. {num_samples*0.05:.1f} segundos)...")
         
         start_time = time.time()
@@ -282,14 +285,13 @@ def collect_data(output_file, num_samples, serial_port, baud_rate):
 # --- BLOQUE PRINCIPAL DE COMANDOS ---
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        # ... (instrucciones de uso) ...
         print("Uso:")
         print("1. Para ADQUIRIR DATOS (Crear CSV): python Entrenamiento.py collect <salida.csv> <PUERTO> <MUESTRAS>")
         print("2. Para ENTRENAR MODELO: python Entrenamiento.py train <nombre_archivo.csv>")
         print("3. Para DETECTAR MOVIMIENTO: python Entrenamiento.py detect <PUERTO> <BAUD_RATE>")
         
-        print("\nEjemplo de ADQUISICIÓN: python Entrenamiento.py collect mi_giro.csv /dev/ttyUSB0 300")
-        print("Ejemplo de ENTRENAMIENTO: python Entrenamiento.py train mi_giro.csv")
+        print("\nEjemplo de ADQUISICIÓN: python Entrenamiento.py collect mi_hechizo.csv /dev/ttyUSB0 300")
+        print("Ejemplo de ENTRENAMIENTO: python Entrenamiento.py train mi_hechizo.csv")
         print("Ejemplo de DETECCIÓN: python Entrenamiento.py detect /dev/ttyUSB0 115200")
         
     elif sys.argv[1] == 'collect' and len(sys.argv) >= 5:
