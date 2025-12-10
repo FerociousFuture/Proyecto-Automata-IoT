@@ -9,8 +9,7 @@ from scipy.spatial.distance import euclidean
 from sklearn.preprocessing import StandardScaler
 
 # --- CONFIGURACIÓN GLOBAL ---
-MODEL_PATH = 'gesture_sequence_template.pkl' 
-SCALER_PATH = 'scaler_for_prediction.pkl'
+MODELS_DIR = 'gesture_models'  # Directorio para guardar múltiples gestos
 SENSOR_COLS = ['Gyro_X', 'Gyro_Y', 'Gyro_Z', 'Acc_X', 'Acc_Y', 'Acc_Z']
 NUM_SENSOR_VALUES = 6
 HEADER = "Gyro_X,Gyro_Y,Gyro_Z,Acc_X,Acc_Y,Acc_Z\n"
@@ -22,9 +21,14 @@ STEP_SIZE = 5               # Evaluación cada 5 muestras (250ms @ 20Hz)
 DTW_THRESHOLD = 150.0       # Umbral de similitud DTW (ajustar según pruebas)
 MIN_ACTIVITY = 0.08         # Filtro de actividad mínima
 COOLDOWN_SAMPLES = 40       # Período de enfriamiento tras detección (2s)
+SIMILARITY_MARGIN = 30.0    # Margen para diferenciar entre gestos (nuevo)
 
 realtime_buffer = []
 cooldown_counter = 0
+
+# Crear directorio si no existe
+if not os.path.exists(MODELS_DIR):
+    os.makedirs(MODELS_DIR)
 
 # --- FUNCIÓN DE NORMALIZACIÓN DE SECUENCIA ---
 def normalize_sequence(sequence):
@@ -59,7 +63,32 @@ def dtw_distance(seq1, seq2):
     
     return dtw_matrix[n, m]
 
-# --- EXTRACCIÓN DE CARACTERÍSTICAS TEMPORALES ---
+# --- UTILIDADES PARA GESTIÓN DE MÚLTIPLES GESTOS ---
+def get_gesture_path(gesture_name):
+    """Retorna la ruta del archivo de un gesto específico."""
+    return os.path.join(MODELS_DIR, f"{gesture_name}.pkl")
+
+def list_trained_gestures():
+    """Lista todos los gestos entrenados disponibles."""
+    if not os.path.exists(MODELS_DIR):
+        return []
+    files = [f.replace('.pkl', '') for f in os.listdir(MODELS_DIR) if f.endswith('.pkl')]
+    return files
+
+def load_gesture(gesture_name):
+    """Carga un gesto específico."""
+    gesture_path = get_gesture_path(gesture_name)
+    if not os.path.exists(gesture_path):
+        return None
+    return joblib.load(gesture_path)
+
+def load_all_gestures():
+    """Carga todos los gestos entrenados."""
+    gestures = {}
+    gesture_names = list_trained_gestures()
+    for name in gesture_names:
+        gestures[name] = load_gesture(name)
+    return gestures
 def extract_temporal_features(data):
     """
     Extrae características que preservan la información temporal del gesto.
@@ -81,11 +110,18 @@ def extract_temporal_features(data):
     return temporal_features
 
 # --- FASE 1: ENTRENAMIENTO - CREA TEMPLATE DE SECUENCIA ---
-def train_model(csv_file):
+def train_model(csv_file, gesture_name=None):
     """
     Lee el CSV de entrenamiento y crea un TEMPLATE de secuencia.
     Este template representa el "camino ideal" del gesto.
+    
+    Args:
+        csv_file: Archivo CSV con los datos del gesto
+        gesture_name: Nombre único del gesto (ej: "lumos", "expelliarmus")
     """
+    if gesture_name is None:
+        gesture_name = os.path.splitext(os.path.basename(csv_file))[0]
+    
     try:
         df_gesture = pd.read_csv(csv_file)
         print(f"✅ Datos de Gesto cargados de '{csv_file}' ({len(df_gesture)} muestras).")
@@ -137,40 +173,68 @@ def train_model(csv_file):
     
     # 6. GUARDAR TEMPLATES Y METADATOS
     template_data = {
+        'gesture_name': gesture_name,
         'templates': templates,
         'template_length': TEMPLATE_LENGTH,
         'avg_activity': max_avg_activity,
-        'sensor_cols': SENSOR_COLS
+        'sensor_cols': SENSOR_COLS,
+        'trained_date': time.strftime("%Y-%m-%d %H:%M:%S")
     }
     
-    joblib.dump(template_data, MODEL_PATH)
+    gesture_path = get_gesture_path(gesture_name)
+    joblib.dump(template_data, gesture_path)
     
     print("\n" + "="*70)
-    print("✅ TEMPLATE DE SECUENCIA CREADO CON ÉXITO")
+    print(f"✅ GESTO '{gesture_name.upper()}' ENTRENADO CON ÉXITO")
     print(f"   Longitud del Template: {TEMPLATE_LENGTH} muestras")
     print(f"   Actividad Promedio: {max_avg_activity:.4f}")
     print(f"   Número de Templates: {len(templates)}")
-    print(f"   Archivo guardado: '{MODEL_PATH}'")
+    print(f"   Archivo guardado: '{gesture_path}'")
     print(f"   Umbral DTW: {DTW_THRESHOLD} (ajusta si hay falsos positivos/negativos)")
     print("="*70)
+    
+    # Mostrar lista de gestos entrenados
+    all_gestures = list_trained_gestures()
+    print(f"\n📚 Gestos entrenados totales: {len(all_gestures)}")
+    print(f"   {', '.join(all_gestures)}")
+    
     return True
 
-# --- FASE 2: DETECCIÓN EN TIEMPO REAL CON DTW ---
-def run_detector(serial_port, baud_rate):
+# --- FASE 2: DETECCIÓN EN TIEMPO REAL CON DTW Y MÚLTIPLES GESTOS ---
+def run_detector(serial_port, baud_rate, target_gestures=None):
     """
-    Detecta el gesto comparando la secuencia en tiempo real con el template
+    Detecta gestos comparando la secuencia en tiempo real con múltiples templates
     usando Dynamic Time Warping (DTW).
+    
+    Args:
+        serial_port: Puerto serial del ESP32
+        baud_rate: Velocidad de comunicación
+        target_gestures: Lista de nombres de gestos a detectar (None = todos)
     """
     global realtime_buffer, cooldown_counter
     
-    try:
-        template_data = joblib.load(MODEL_PATH)
-        templates = template_data['templates']
-        template_length = template_data['template_length']
-        print(f"✅ Templates cargados: {len(templates)} variaciones")
-    except FileNotFoundError:
-        print("❌ Error: No se encontró el archivo del modelo. Ejecuta 'train' primero.")
-        return
+    # Cargar todos los gestos o solo los especificados
+    if target_gestures is None:
+        all_gestures = load_all_gestures()
+        if not all_gestures:
+            print("❌ Error: No hay gestos entrenados. Ejecuta 'train' primero.")
+            return
+        print(f"✅ Cargados {len(all_gestures)} gestos: {', '.join(all_gestures.keys())}")
+    else:
+        all_gestures = {}
+        for gesture_name in target_gestures:
+            gesture_data = load_gesture(gesture_name)
+            if gesture_data is None:
+                print(f"⚠️  Advertencia: Gesto '{gesture_name}' no encontrado.")
+            else:
+                all_gestures[gesture_name] = gesture_data
+        
+        if not all_gestures:
+            print("❌ Error: No se pudo cargar ningún gesto especificado.")
+            return
+        print(f"✅ Cargados gestos específicos: {', '.join(all_gestures.keys())}")
+    
+    template_length = list(all_gestures.values())[0]['template_length']
 
     print(f"📡 Conectando a {serial_port} @ {baud_rate}...")
     
@@ -178,8 +242,9 @@ def run_detector(serial_port, baud_rate):
         ser = serial.Serial(serial_port, baud_rate, timeout=1)
         time.sleep(2)
         ser.flushInput()
-        print("🟢 Detector de Secuencia ACTIVO")
-        print(f"🎯 Esperando gesto... (DTW Threshold: {DTW_THRESHOLD})")
+        print("🟢 Detector Multi-Gesto ACTIVO")
+        print(f"🎯 Esperando gestos... (DTW Threshold: {DTW_THRESHOLD})")
+        print(f"🪄 Gestos activos: {', '.join(all_gestures.keys())}\n")
     except serial.SerialException as e:
         print(f"❌ Error al abrir '{serial_port}': {e}")
         return
@@ -229,32 +294,64 @@ def run_detector(serial_port, baud_rate):
                             )
                             current_normalized = normalize_sequence(current_features)
                             
-                            # 3. CALCULAR DTW CON TODOS LOS TEMPLATES
-                            min_distance = float('inf')
-                            for template in templates:
-                                distance = dtw_distance(current_normalized, template)
-                                if distance < min_distance:
-                                    min_distance = distance
+                            # 3. CALCULAR DTW CON TODOS LOS GESTOS ENTRENADOS
+                            gesture_distances = {}
                             
-                            # 4. EVALUAR SIMILITUD
-                            similarity_score = max(0, 100 - (min_distance / DTW_THRESHOLD * 100))
-                            
-                            if min_distance <= DTW_THRESHOLD:
-                                print(f"\n\n🎉 ¡GESTO DETECTADO! ✨")
-                                print(f"   Distancia DTW: {min_distance:.2f}")
-                                print(f"   Similitud: {similarity_score:.1f}%")
-                                print(f"   Actividad: {current_activity:.3f}")
+                            for gesture_name, gesture_data in all_gestures.items():
+                                templates = gesture_data['templates']
+                                min_distance = float('inf')
                                 
-                                # Activar cooldown y limpiar buffer
-                                cooldown_counter = COOLDOWN_SAMPLES
-                                realtime_buffer = []
+                                for template in templates:
+                                    distance = dtw_distance(current_normalized, template)
+                                    if distance < min_distance:
+                                        min_distance = distance
+                                
+                                gesture_distances[gesture_name] = min_distance
+                            
+                            # 4. ENCONTRAR EL GESTO MÁS CERCANO
+                            best_gesture = min(gesture_distances, key=gesture_distances.get)
+                            best_distance = gesture_distances[best_gesture]
+                            
+                            # 5. VERIFICAR SI SUPERA EL UMBRAL
+                            if best_distance <= DTW_THRESHOLD:
+                                # Verificar que sea significativamente mejor que otros gestos
+                                second_best_distance = sorted(gesture_distances.values())[1] if len(gesture_distances) > 1 else float('inf')
+                                
+                                # Margen de discriminación entre gestos
+                                is_distinctive = (second_best_distance - best_distance) > SIMILARITY_MARGIN
+                                
+                                if is_distinctive or len(all_gestures) == 1:
+                                    similarity_score = max(0, 100 - (best_distance / DTW_THRESHOLD * 100))
+                                    
+                                    print(f"\n\n🎉 ¡GESTO DETECTADO: '{best_gesture.upper()}'! ✨")
+                                    print(f"   Distancia DTW: {best_distance:.2f}")
+                                    print(f"   Similitud: {similarity_score:.1f}%")
+                                    print(f"   Actividad: {current_activity:.3f}")
+                                    
+                                    if len(all_gestures) > 1:
+                                        print(f"   Margen sobre siguiente: {second_best_distance - best_distance:.2f}")
+                                        print(f"   Otros gestos descartados:")
+                                        for gname, gdist in sorted(gesture_distances.items(), key=lambda x: x[1]):
+                                            if gname != best_gesture:
+                                                print(f"      - {gname}: {gdist:.2f}")
+                                    
+                                    # Activar cooldown y limpiar buffer
+                                    cooldown_counter = COOLDOWN_SAMPLES
+                                    realtime_buffer = []
+                                else:
+                                    sys.stdout.write(
+                                        f"\r⚠️  Gesto ambiguo - "
+                                        f"{best_gesture}:{best_distance:.1f} vs otros:{second_best_distance:.1f}   "
+                                    )
+                                    sys.stdout.flush()
                             else:
-                                sys.stdout.write(
-                                    f"\r🔍 Analizando... "
-                                    f"DTW: {min_distance:.1f} | "
-                                    f"Similitud: {similarity_score:.1f}% | "
-                                    f"Act: {current_activity:.3f}   "
-                                )
+                                # Mostrar progreso de análisis
+                                status_line = f"🔍 Analizando... "
+                                for gname in sorted(all_gestures.keys()):
+                                    status_line += f"{gname}:{gesture_distances[gname]:.1f} | "
+                                status_line += f"Act:{current_activity:.3f}   "
+                                
+                                sys.stdout.write(f"\r{status_line}")
                                 sys.stdout.flush()
                             
                     except ValueError:
@@ -333,48 +430,104 @@ def collect_data(output_file, repetitions, serial_port, baud_rate):
     print(f"{'='*60}")
 
 # --- UTILIDAD: VISUALIZAR TEMPLATE ---
-def visualize_template():
+def visualize_template(gesture_name=None):
     """
     Muestra información del template entrenado.
+    Si no se especifica gesture_name, muestra todos.
     """
-    try:
-        template_data = joblib.load(MODEL_PATH)
-        templates = template_data['templates']
+    if gesture_name:
+        # Mostrar un gesto específico
+        gesture_data = load_gesture(gesture_name)
+        if gesture_data is None:
+            print(f"❌ Gesto '{gesture_name}' no encontrado.")
+            return
         
         print("\n" + "="*60)
-        print("📊 INFORMACIÓN DEL TEMPLATE")
+        print(f"📊 INFORMACIÓN DEL GESTO: {gesture_name.upper()}")
         print("="*60)
-        print(f"Número de templates: {len(templates)}")
-        print(f"Longitud: {template_data['template_length']} muestras")
-        print(f"Dimensiones: {templates[0].shape[1]} características")
-        print(f"Actividad promedio: {template_data['avg_activity']:.4f}")
-        print(f"Umbral DTW actual: {DTW_THRESHOLD}")
+        print(f"Fecha de entrenamiento: {gesture_data.get('trained_date', 'N/A')}")
+        print(f"Número de templates: {len(gesture_data['templates'])}")
+        print(f"Longitud: {gesture_data['template_length']} muestras")
+        print(f"Dimensiones: {gesture_data['templates'][0].shape[1]} características")
+        print(f"Actividad promedio: {gesture_data['avg_activity']:.4f}")
         print("="*60)
+    else:
+        # Mostrar todos los gestos
+        all_gestures = load_all_gestures()
+        if not all_gestures:
+            print("❌ No hay gestos entrenados.")
+            return
         
-    except FileNotFoundError:
-        print("❌ No se encontró el template. Ejecuta 'train' primero.")
+        print("\n" + "="*70)
+        print(f"📚 BIBLIOTECA DE GESTOS ({len(all_gestures)} gestos entrenados)")
+        print("="*70)
+        
+        for name, data in sorted(all_gestures.items()):
+            print(f"\n🪄 {name.upper()}")
+            print(f"   Fecha: {data.get('trained_date', 'N/A')}")
+            print(f"   Templates: {len(data['templates'])} | Longitud: {data['template_length']} | Actividad: {data['avg_activity']:.4f}")
+        
+        print("\n" + "="*70)
+        print(f"Umbral DTW actual: {DTW_THRESHOLD}")
+        print(f"Margen de similitud: {SIMILARITY_MARGIN}")
+        print("="*70)
+
+def delete_gesture(gesture_name):
+    """Elimina un gesto entrenado."""
+    gesture_path = get_gesture_path(gesture_name)
+    if not os.path.exists(gesture_path):
+        print(f"❌ Gesto '{gesture_name}' no encontrado.")
+        return False
+    
+    os.remove(gesture_path)
+    print(f"✅ Gesto '{gesture_name}' eliminado correctamente.")
+    return True
 
 # --- BLOQUE PRINCIPAL ---
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("\n" + "="*70)
-        print("🪄 SISTEMA DE DETECCIÓN DE GESTOS POR SECUENCIA TEMPORAL")
+        print("🪄 SISTEMA DE DETECCIÓN MULTI-GESTO CON SECUENCIA TEMPORAL")
         print("="*70)
         print("\nCOMANDOS DISPONIBLES:")
-        print("\n1. RECOLECTAR DATOS:")
+        
+        print("\n1. RECOLECTAR DATOS PARA UN GESTO:")
         print("   python Entrenamiento.py collect <salida.csv> <PUERTO> <REPS>")
-        print("   Ejemplo: python Entrenamiento.py collect hechizo.csv /dev/ttyUSB0 10")
+        print("   Ejemplo: python Entrenamiento.py collect lumos.csv /dev/ttyUSB0 10")
         
-        print("\n2. ENTRENAR TEMPLATE:")
-        print("   python Entrenamiento.py train <archivo.csv>")
-        print("   Ejemplo: python Entrenamiento.py train hechizo.csv")
+        print("\n2. ENTRENAR UN GESTO ESPECÍFICO:")
+        print("   python Entrenamiento.py train <archivo.csv> [nombre_gesto]")
+        print("   Ejemplo: python Entrenamiento.py train lumos.csv lumos")
+        print("   (Si no especificas nombre, usa el nombre del archivo)")
         
-        print("\n3. DETECTAR GESTO:")
-        print("   python Entrenamiento.py detect <PUERTO> <BAUD>")
-        print("   Ejemplo: python Entrenamiento.py detect /dev/ttyUSB0 115200")
+        print("\n3. DETECTAR GESTOS:")
+        print("   a) Detectar TODOS los gestos entrenados:")
+        print("      python Entrenamiento.py detect <PUERTO> <BAUD>")
+        print("      Ejemplo: python Entrenamiento.py detect /dev/ttyUSB0 115200")
+        print("\n   b) Detectar SOLO gestos específicos:")
+        print("      python Entrenamiento.py detect <PUERTO> <BAUD> <gesto1> [gesto2] ...")
+        print("      Ejemplo: python Entrenamiento.py detect /dev/ttyUSB0 115200 lumos expelliarmus")
         
-        print("\n4. VER INFORMACIÓN DEL TEMPLATE:")
-        print("   python Entrenamiento.py info")
+        print("\n4. VER INFORMACIÓN DE GESTOS:")
+        print("   a) Ver todos los gestos:")
+        print("      python Entrenamiento.py info")
+        print("   b) Ver un gesto específico:")
+        print("      python Entrenamiento.py info <nombre_gesto>")
+        print("      Ejemplo: python Entrenamiento.py info lumos")
+        
+        print("\n5. LISTAR GESTOS ENTRENADOS:")
+        print("   python Entrenamiento.py list")
+        
+        print("\n6. ELIMINAR UN GESTO:")
+        print("   python Entrenamiento.py delete <nombre_gesto>")
+        print("   Ejemplo: python Entrenamiento.py delete lumos")
+        
+        print("\n" + "="*70)
+        print("💡 FLUJO DE TRABAJO RECOMENDADO:")
+        print("   1. Recolecta datos: collect hechizo1.csv /dev/ttyUSB0 10")
+        print("   2. Entrena el gesto: train hechizo1.csv hechizo1")
+        print("   3. Repite para más gestos (hechizo2, hechizo3, etc.)")
+        print("   4. Detecta todos: detect /dev/ttyUSB0 115200")
         print("="*70 + "\n")
         
     elif sys.argv[1] == 'collect' and len(sys.argv) >= 5:
@@ -383,16 +536,47 @@ if __name__ == "__main__":
         reps = int(sys.argv[4])
         collect_data(output, reps, port, 115200)
 
-    elif sys.argv[1] == 'train' and len(sys.argv) == 3:
-        train_model(sys.argv[2])
+    elif sys.argv[1] == 'train':
+        if len(sys.argv) == 3:
+            # Solo archivo CSV, nombre automático
+            train_model(sys.argv[2])
+        elif len(sys.argv) == 4:
+            # Archivo CSV + nombre personalizado
+            train_model(sys.argv[2], sys.argv[3])
+        else:
+            print("❌ Uso: train <archivo.csv> [nombre_gesto]")
     
-    elif sys.argv[1] == 'detect' and len(sys.argv) >= 3:
-        port = sys.argv[2]
-        baud = int(sys.argv[3]) if len(sys.argv) == 4 else 115200
-        run_detector(port, baud)
+    elif sys.argv[1] == 'detect':
+        if len(sys.argv) >= 3:
+            port = sys.argv[2]
+            baud = int(sys.argv[3]) if len(sys.argv) >= 4 and sys.argv[3].isdigit() else 115200
+            
+            # Verificar si hay gestos específicos
+            gesture_start_index = 4 if len(sys.argv) >= 4 and sys.argv[3].isdigit() else 3
+            target_gestures = sys.argv[gesture_start_index:] if len(sys.argv) > gesture_start_index else None
+            
+            run_detector(port, baud, target_gestures)
+        else:
+            print("❌ Uso: detect <PUERTO> <BAUD> [gesto1] [gesto2] ...")
     
     elif sys.argv[1] == 'info':
-        visualize_template()
+        if len(sys.argv) == 2:
+            visualize_template()  # Mostrar todos
+        else:
+            visualize_template(sys.argv[2])  # Mostrar específico
+    
+    elif sys.argv[1] == 'list':
+        gestures = list_trained_gestures()
+        if gestures:
+            print("\n📚 Gestos entrenados:")
+            for i, gesture in enumerate(gestures, 1):
+                print(f"   {i}. {gesture}")
+            print(f"\nTotal: {len(gestures)} gesto(s)")
+        else:
+            print("❌ No hay gestos entrenados.")
+    
+    elif sys.argv[1] == 'delete' and len(sys.argv) == 3:
+        delete_gesture(sys.argv[2])
     
     else:
         print("❌ Comando no reconocido. Usa sin argumentos para ver la ayuda.")
