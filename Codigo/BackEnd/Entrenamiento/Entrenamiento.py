@@ -63,6 +63,40 @@ def dtw_distance(seq1, seq2):
     
     return dtw_matrix[n, m]
 
+# --- FUNCIÓN DE LIMPIEZA Y VALIDACIÓN DE DATOS ---
+def clean_and_validate_csv(df):
+    """
+    Limpia y valida el DataFrame eliminando filas con datos corruptos.
+    """
+    original_len = len(df)
+    
+    # 1. Intentar convertir todas las columnas a numérico
+    for col in SENSOR_COLS:
+        if col in df.columns:
+            # Forzar conversión, valores inválidos se vuelven NaN
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # 2. Eliminar filas con valores NaN
+    df_clean = df.dropna(subset=SENSOR_COLS)
+    
+    # 3. Eliminar filas con valores extremos (outliers severos)
+    for col in SENSOR_COLS:
+        # Definir límites razonables para cada sensor
+        if 'Gyro' in col:
+            # Giroscopio: típicamente ±2000 deg/s
+            df_clean = df_clean[(df_clean[col] >= -2500) & (df_clean[col] <= 2500)]
+        else:  # Acelerómetro
+            # Acelerómetro: típicamente ±16g (1g ≈ 9.81 m/s²)
+            df_clean = df_clean[(df_clean[col] >= -200) & (df_clean[col] <= 200)]
+    
+    removed = original_len - len(df_clean)
+    
+    if removed > 0:
+        print(f"⚠️  Limpieza de datos: {removed} filas corruptas/inválidas eliminadas")
+        print(f"   Filas válidas restantes: {len(df_clean)}/{original_len}")
+    
+    return df_clean
+
 # --- UTILIDADES PARA GESTIÓN DE MÚLTIPLES GESTOS ---
 def get_gesture_path(gesture_name):
     """Retorna la ruta del archivo de un gesto específico."""
@@ -124,17 +158,31 @@ def train_model(csv_file, gesture_name=None):
     
     try:
         df_gesture = pd.read_csv(csv_file)
-        print(f"✅ Datos de Gesto cargados de '{csv_file}' ({len(df_gesture)} muestras).")
+        print(f"✅ Datos cargados de '{csv_file}' ({len(df_gesture)} muestras).")
     except FileNotFoundError:
         print(f"❌ Error: Archivo CSV '{csv_file}' no encontrado.")
         return
+    except Exception as e:
+        print(f"❌ Error al leer el CSV: {e}")
+        return
 
+    # LIMPIEZA Y VALIDACIÓN DE DATOS
+    df_gesture = clean_and_validate_csv(df_gesture)
+    
     if len(df_gesture) < TEMPLATE_LENGTH:
-        print(f"❌ Error: Se necesitan al menos {TEMPLATE_LENGTH} muestras. Archivo tiene {len(df_gesture)}.")
+        print(f"❌ Error: Después de limpiar, quedan {len(df_gesture)} muestras.")
+        print(f"   Se necesitan al menos {TEMPLATE_LENGTH} muestras válidas.")
+        print(f"   Revisa la calidad de los datos recolectados.")
         return
 
     # 1. CALCULAR ACTIVIDAD Y SEGMENTAR EL GESTO PRINCIPAL
-    df_gesture['Activity'] = df_gesture[SENSOR_COLS].std(axis=1)
+    try:
+        df_gesture['Activity'] = df_gesture[SENSOR_COLS].std(axis=1)
+    except Exception as e:
+        print(f"❌ Error al calcular actividad: {e}")
+        print("   Verifica que todas las columnas de sensores existan y sean numéricas.")
+        return
+    
     active_segments = df_gesture[df_gesture['Activity'] > MIN_ACTIVITY]
     
     if len(active_segments) < TEMPLATE_LENGTH:
@@ -156,7 +204,11 @@ def train_model(csv_file, gesture_name=None):
     template_segment = df_gesture.iloc[best_start:best_start+TEMPLATE_LENGTH]
     
     # 3. EXTRAER CARACTERÍSTICAS TEMPORALES
-    template_features = extract_temporal_features(template_segment[SENSOR_COLS])
+    try:
+        template_features = extract_temporal_features(template_segment[SENSOR_COLS])
+    except Exception as e:
+        print(f"❌ Error al extraer características: {e}")
+        return
     
     # 4. NORMALIZAR LA SECUENCIA TEMPLATE
     template_normalized = normalize_sequence(template_features)
@@ -178,7 +230,8 @@ def train_model(csv_file, gesture_name=None):
         'template_length': TEMPLATE_LENGTH,
         'avg_activity': max_avg_activity,
         'sensor_cols': SENSOR_COLS,
-        'trained_date': time.strftime("%Y-%m-%d %H:%M:%S")
+        'trained_date': time.strftime("%Y-%m-%d %H:%M:%S"),
+        'samples_used': len(df_gesture)
     }
     
     gesture_path = get_gesture_path(gesture_name)
@@ -186,11 +239,12 @@ def train_model(csv_file, gesture_name=None):
     
     print("\n" + "="*70)
     print(f"✅ GESTO '{gesture_name.upper()}' ENTRENADO CON ÉXITO")
+    print(f"   Muestras válidas usadas: {len(df_gesture)}")
     print(f"   Longitud del Template: {TEMPLATE_LENGTH} muestras")
     print(f"   Actividad Promedio: {max_avg_activity:.4f}")
     print(f"   Número de Templates: {len(templates)}")
     print(f"   Archivo guardado: '{gesture_path}'")
-    print(f"   Umbral DTW: {DTW_THRESHOLD} (ajusta si hay falsos positivos/negativos)")
+    print(f"   Umbral DTW: {DTW_THRESHOLD}")
     print("="*70)
     
     # Mostrar lista de gestos entrenados
@@ -373,6 +427,7 @@ def run_detector(serial_port, baud_rate, target_gestures=None):
 def collect_data(output_file, repetitions, serial_port, baud_rate):
     """
     Recolecta datos para entrenamiento con control ENTER/Ctrl+C.
+    Incluye validación en tiempo real de datos.
     """
     print(f"📡 Conectando a {serial_port} @ {baud_rate}...")
     try:
@@ -385,6 +440,7 @@ def collect_data(output_file, repetitions, serial_port, baud_rate):
         return
 
     data_count = 0
+    error_count = 0
     
     with open(output_file, 'w') as f:
         f.write(HEADER)
@@ -396,6 +452,7 @@ def collect_data(output_file, repetitions, serial_port, baud_rate):
             print("🔴 GRABANDO... (Ctrl+C para detener)")
             
             rep_samples = 0
+            rep_errors = 0
             
             try:
                 while True:
@@ -404,13 +461,38 @@ def collect_data(output_file, repetitions, serial_port, baud_rate):
                         parts = line.split(',')
                         
                         if len(parts) == NUM_SENSOR_VALUES:
-                            f.write(line + '\n')
-                            rep_samples += 1
-                            data_count += 1
-                            sys.stdout.write(
-                                f"\rRep {rep}: {rep_samples} muestras | "
-                                f"Total: {data_count} (Ctrl+C para finalizar)"
-                            )
+                            # VALIDACIÓN EN TIEMPO REAL
+                            try:
+                                values = [float(p.strip()) for p in parts]
+                                
+                                # Verificar rangos razonables
+                                valid = True
+                                for i, val in enumerate(values):
+                                    if i < 3:  # Giroscopio
+                                        if abs(val) > 2500:
+                                            valid = False
+                                    else:  # Acelerómetro
+                                        if abs(val) > 200:
+                                            valid = False
+                                
+                                if valid:
+                                    f.write(line + '\n')
+                                    rep_samples += 1
+                                    data_count += 1
+                                else:
+                                    rep_errors += 1
+                                    error_count += 1
+                                    
+                            except ValueError:
+                                rep_errors += 1
+                                error_count += 1
+                                continue
+                            
+                            status = f"\rRep {rep}: {rep_samples} válidas"
+                            if rep_errors > 0:
+                                status += f" | {rep_errors} errores"
+                            status += f" | Total: {data_count} (Ctrl+C para finalizar)"
+                            sys.stdout.write(status)
                             sys.stdout.flush()
                     
                     time.sleep(0.01)
@@ -418,13 +500,22 @@ def collect_data(output_file, repetitions, serial_port, baud_rate):
             except KeyboardInterrupt:
                 pass
             
-            print(f"\n✅ Repetición {rep} completada: {rep_samples} muestras")
+            quality = "✅" if rep_errors < rep_samples * 0.1 else "⚠️"
+            print(f"\n{quality} Repetición {rep} completada: {rep_samples} muestras válidas")
+            if rep_errors > 0:
+                print(f"   {rep_errors} lecturas descartadas por valores inválidos")
             input("Presiona ENTER para continuar...\n")
 
     ser.close()
+    
+    quality_pct = (data_count / (data_count + error_count) * 100) if (data_count + error_count) > 0 else 100
+    
     print(f"\n{'='*60}")
     print(f"✅ RECOLECCIÓN FINALIZADA")
-    print(f"   Total de muestras: {data_count}")
+    print(f"   Muestras válidas: {data_count}")
+    if error_count > 0:
+        print(f"   Muestras descartadas: {error_count}")
+    print(f"   Calidad de datos: {quality_pct:.1f}%")
     print(f"   Archivo: '{output_file}'")
     print(f"   Recomendado: Mínimo {TEMPLATE_LENGTH} muestras por repetición")
     print(f"{'='*60}")
