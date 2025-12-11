@@ -1,10 +1,10 @@
 import time
 import threading
 import os
-# Importaciones necesarias para OpenCV y la manipulación de imágenes
 import cv2
 import numpy as np
 from PIL import Image
+import random  # Necesario para la aleatoriedad
 
 from luma.core.interface.serial import i2c
 from luma.core.render import canvas
@@ -16,12 +16,16 @@ OLED_WIDTH = 128
 OLED_HEIGHT = 64
 
 # --- RUTAS DE ARCHIVOS DE VIDEO (AJUSTADAS PARA LA CARPETA 'Caras') ---
-IDLE_VIDEO_PATH = "Caras/idle.mp4"        # Ruta ajustada
-BLINK_VIDEO_PATH = "Caras/Parpadeo.mp4"   # Ruta ajustada
+IDLE_VIDEO_PATH = "Caras/idle.mp4"
+BLINK_VIDEO_PATH = "Caras/Parpadeo.mp4"
 
-# --- FRAME RATE DE LA ANIMACIÓN ---
+# --- PARAMETROS DE ANIMACIÓN ---
 ANIMATION_FPS = 20
 FRAME_DELAY = 1.0 / ANIMATION_FPS
+
+# --- NUEVOS PARAMETROS DE TIEMPO DE PARPADEO ---
+MIN_IDLE_TIME = 5.0  # Mínimo de 5 segundos entre parpadeos
+MAX_IDLE_TIME = 10.0 # Máximo de 10 segundos entre parpadeos
 
 class AnimatedOLED:
     def __init__(self):
@@ -30,21 +34,25 @@ class AnimatedOLED:
         self.device = ssd1306(serial, width=OLED_WIDTH, height=OLED_HEIGHT)
         
         # Estado
-        self.modo = "idle"  # puede ser "idle" o "figura"
+        self.modo = "idle"  # puede ser "idle", "figura", o "blinking"
         self.figura_actual = None
         self.running = True
         self.frame = 0
         
         # --- LÓGICA DE CARGA DE FRAMES DE VIDEO ---
-        idle_frames = self.load_video_frames(IDLE_VIDEO_PATH)
-        blink_frames = self.load_video_frames(BLINK_VIDEO_PATH)
+        self.idle_frames = self.load_video_frames(IDLE_VIDEO_PATH)
+        self.blink_frames = self.load_video_frames(BLINK_VIDEO_PATH)
         
-        # Combinar las animaciones: idle + Parpadeo (x2) para ciclo inactivo
-        # Si idle.mp4 es la animación normal y Parpadeo.mp4 es un parpadeo,
-        # esto crea la secuencia: Normal -> Parpadeo -> Normal -> Parpadeo -> Normal...
-        self.idle_frames = idle_frames + blink_frames * 2
-        
-        # Diccionario de figuras disponibles (mantenemos el ASCII para compatibilidad)
+        if not self.idle_frames:
+            # Fallback para evitar errores si no se carga el video idle
+            self.idle_frames = [Image.new('1', (OLED_WIDTH, OLED_HEIGHT), 0)] 
+            
+        # Variables de control para el parpadeo
+        self.is_blinking = False
+        self.blink_frame_counter = 0
+        self.next_blink_time = time.time() + self.get_random_idle_time()
+
+        # Diccionario de figuras disponibles (ASCII)
         self.figuras = {
             "cubo": ["   +---+", "  /   /|", " +---+ |", " |   | +", " |   |/", " +---+" ],
             "flecha": ["    ^", "   |||", "   |||", "   |||", " =======" ],
@@ -56,17 +64,19 @@ class AnimatedOLED:
             "triangulo": ["     *", "    * *", "   * *", "  * *", " *********" ]
         }
 
+    def get_random_idle_time(self):
+        """Genera un tiempo de espera aleatorio entre MIN_IDLE_TIME y MAX_IDLE_TIME."""
+        return random.uniform(MIN_IDLE_TIME, MAX_IDLE_TIME)
+
     def load_video_frames(self, video_path):
         """Carga y pre-procesa frames de video en imágenes PIL monocromáticas."""
         if not os.path.exists(video_path):
             print(f"❌ ERROR: Archivo de video no encontrado: {video_path}. Usando un frame de error.")
-            # Crear un frame de error simple (fondo negro con "X" blanca)
             image_error = Image.new('1', (OLED_WIDTH, OLED_HEIGHT), 0)
             draw_error = canvas(image_error)
-            # Para la pantalla 128x64, usamos una fuente más pequeña para el mensaje de error.
             draw_error.text((5, 5), "NO VIDEO FILE:", fill=1)
             draw_error.text((5, 15), video_path, fill=1)
-            return [image_error] * ANIMATION_FPS # Suficientes frames para 1 segundo
+            return [image_error] * ANIMATION_FPS
             
         cap = cv2.VideoCapture(video_path)
         frames = []
@@ -76,17 +86,9 @@ class AnimatedOLED:
             if not ret:
                 break
             
-            # 1. Redimensionar al tamaño del OLED (128x64)
             resized_frame = cv2.resize(frame, (OLED_WIDTH, OLED_HEIGHT), interpolation=cv2.INTER_AREA)
-            
-            # 2. Convertir a escala de grises
             gray_frame = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2GRAY)
-            
-            # 3. Aplicar umbral para obtener blanco y negro (monocromático, modo '1')
-            # El umbral 127 es estándar, se puede ajustar para un mejor contraste.
             _, monochrome_frame = cv2.threshold(gray_frame, 127, 255, cv2.THRESH_BINARY)
-            
-            # 4. Convertir a imagen PIL en modo '1'
             pil_image = Image.fromarray(monochrome_frame).convert('1')
             frames.append(pil_image)
             
@@ -95,15 +97,30 @@ class AnimatedOLED:
         return frames
 
     def dibujar_idle(self):
-        """Dibuja el frame actual de la animación idle (video)."""
-        # Seleccionar el frame actual de la animación de video
-        current_frame_index = self.frame % len(self.idle_frames)
-        frame_image = self.idle_frames[current_frame_index]
+        """Dibuja el frame actual de la animación idle o blinking."""
         
-        # Pegar la imagen PIL monocromática directamente sobre el dispositivo.
-        # Esto es más eficiente que usar draw.paste() con canvas.
-        self.device.display(frame_image) 
-        
+        # Lógica para alternar entre animación normal y parpadeo
+        if self.is_blinking and self.blink_frames:
+            # 1. Mostrar frame de parpadeo
+            current_frame_index = self.blink_frame_counter % len(self.blink_frames)
+            frame_image = self.blink_frames[current_frame_index]
+            self.device.display(frame_image)
+            self.blink_frame_counter += 1
+            
+            # 2. Si la animación de parpadeo termina, regresar a idle
+            if self.blink_frame_counter >= len(self.blink_frames):
+                self.is_blinking = False
+                self.blink_frame_counter = 0
+                self.next_blink_time = time.time() + self.get_random_idle_time()
+                print(f"Parpadeo terminado. Próximo parpadeo en {self.next_blink_time - time.time():.2f} segundos.")
+                
+        else:
+            # Mostrar frame de idle (animación normal)
+            current_frame_index = self.frame % len(self.idle_frames)
+            frame_image = self.idle_frames[current_frame_index]
+            self.device.display(frame_image)
+            self.frame += 1
+
     def dibujar_figura(self, nombre_figura):
         """Dibuja una figura específica (mantenemos la lógica ASCII original)."""
         if nombre_figura not in self.figuras:
@@ -111,18 +128,11 @@ class AnimatedOLED:
         
         figura = self.figuras[nombre_figura]
         
-        # NOTA: La librería luma.oled es lenta para dibujar ASCII. Si se requiere más
-        # eficiencia, estas figuras deberían convertirse a bitmaps pre-renderizados.
         with canvas(self.device) as draw:
             draw.rectangle(self.device.bounding_box, outline="black", fill="black")
-            
-            # Titulo simple
             draw.text((2, 2), nombre_figura.upper(), fill="white")
-            
-            # Centrar la figura
             y_start = 18
             for i, linea in enumerate(figura):
-                # La fuente predeterminada es de 6x8, por eso la multiplicación por 6
                 x = (OLED_WIDTH - len(linea) * 6) // 2
                 draw.text((x, y_start + i * 10), linea, fill="white")
         
@@ -131,7 +141,9 @@ class AnimatedOLED:
     def mostrar_figura(self, nombre):
         """Cambia al modo figura y muestra por 3 segundos."""
         if nombre in self.figuras:
+            # Deshabilitar parpadeo mientras se muestra una figura
             self.modo = "figura"
+            self.is_blinking = False 
             self.figura_actual = nombre
             self.dibujar_figura(nombre)
             
@@ -140,6 +152,8 @@ class AnimatedOLED:
                 time.sleep(3)
                 self.modo = "idle"
                 self.figura_actual = None
+                # Restablecer el temporizador de parpadeo al volver a idle
+                self.next_blink_time = time.time() + self.get_random_idle_time()
             
             threading.Thread(target=volver_idle, daemon=True).start()
             return True
@@ -148,13 +162,19 @@ class AnimatedOLED:
             return False
     
     def loop_animacion(self):
-        """Loop principal de animación (controla el frame rate del video)."""
+        """Loop principal de animación con lógica de temporizador aleatorio."""
         while self.running:
             start_time = time.time()
             
             if self.modo == "idle":
+                current_time = time.time()
+                
+                # Iniciar el parpadeo si es el momento y la animación blink fue cargada
+                if not self.is_blinking and current_time >= self.next_blink_time and self.blink_frames:
+                    self.is_blinking = True
+                    self.blink_frame_counter = 0
+                
                 self.dibujar_idle()
-                self.frame += 1
                 
                 # Control de velocidad (para mantener el FPS constante)
                 elapsed_time = time.time() - start_time
@@ -162,9 +182,10 @@ class AnimatedOLED:
                 if sleep_time > 0:
                     time.sleep(sleep_time)
             else:
-                time.sleep(0.1) # En modo figura, solo esperar para no consumir CPU
+                # Si está en modo figura, solo esperar. El temporizador de parpadeo
+                # se restablece cuando vuelve al modo 'idle'.
+                time.sleep(0.1)
 
-    # Métodos restantes (iniciar, detener, listar_figuras) sin cambios...
     def iniciar(self):
         """Inicia el loop de animación en un thread."""
         thread = threading.Thread(target=self.loop_animacion, daemon=True)
@@ -184,16 +205,14 @@ class AnimatedOLED:
 # --- PROGRAMA PRINCIPAL ---
 if __name__ == "__main__":
     try:
-        # Se asume que las librerías cv2 y PIL están instaladas.
-        print("Iniciando OLED animado con videos...")
+        print("Iniciando OLED animado con temporizador aleatorio...")
         oled = AnimatedOLED()
         
         # Iniciar animación
         oled.iniciar()
         
         print("\n=== COMANDOS DISPONIBLES ===")
-        print(f"Videos cargados de: {IDLE_VIDEO_PATH} y {BLINK_VIDEO_PATH}")
-        print(f"FPS de la animación de video: {ANIMATION_FPS}")
+        print(f"Parpadeo aleatorio entre {MIN_IDLE_TIME}s y {MAX_IDLE_TIME}s.")
         print("Escribe el nombre de una figura (ASCII) para mostrarla temporalmente:")
         print(f"Figuras: {', '.join(oled.listar_figuras())}")
         print("Escribe 'salir' para terminar\n")
