@@ -21,80 +21,92 @@ class AnimatedOLED:
         self.running = True
         self.frame = 0
         
-        # Caras para animación idle
+        # Caras del robot para animación idle (ASCII basico)
         self.caras_idle = [
-            # Cara normal parpadeando
+            # Cara normal
             [
-                "    ╭─────╮",
-                "   │ ^  ^ │",
-                "   │   ω  │",
-                "    ╰─────╯"
+                " [=====]",
+                " | o o |",
+                " |  -  |",
+                " [=====]"
             ],
-            # Ojos cerrados
+            # Parpadeando
             [
-                "    ╭─────╮",
-                "   │ -  - │",
-                "   │   ω  │",
-                "    ╰─────╯"
+                " [=====]",
+                " | - - |",
+                " |  -  |",
+                " [=====]"
             ],
-            # Sonrisa
+            # Procesando
             [
-                "    ╭─────╮",
-                "   │ ^  ^ │",
-                "   │  \_/  │",
-                "    ╰─────╯"
+                " [=====]",
+                " | O O |",
+                " |  >  |",
+                " [=====]"
             ]
         ]
         
-        # Diccionario de figuras disponibles
+        # Diccionario de figuras disponibles (formas y simbolos, NO caras)
         self.figuras = {
-            "gato": [
-                "  /\\_/\\",
-                " ( o.o )",
-                "  > ^ <",
-                " /|   |\\",
-                "(_|   |_)"
+            "cubo": [
+                "   +---+",
+                "  /   /|",
+                " +---+ |",
+                " |   | +",
+                " |   |/",
+                " +---+"
             ],
-            "perro": [
-                "  /^ ^\\",
-                " / o o \\",
-                "(   >  )",
-                " | --- |",
-                " U   U"
+            "flecha": [
+                "    ^",
+                "   |||",
+                "   |||",
+                "   |||",
+                " ======="
             ],
-            "corazon": [
-                "  ♥♥  ♥♥",
-                " ♥  ♥♥  ♥",
-                "♥   ♥    ♥",
-                " ♥      ♥",
-                "  ♥    ♥",
-                "    ♥♥"
+            "check": [
+                "       *",
+                "      **",
+                " *   **",
+                "  * **",
+                "   **",
+                "   *"
             ],
-            "estrella": [
+            "cruz": [
+                "  *   *",
+                "   * *",
                 "    *",
-                "   ***",
-                "  *****",
-                " *******",
-                "  *****",
-                "   ***",
-                "    *"
+                "   * *",
+                "  *   *"
             ],
-            "feliz": [
-                "  \\(^o^)/",
-                "    | |",
-                "   / \\"
+            "circulo": [
+                "  ****",
+                " *    *",
+                "*      *",
+                " *    *",
+                "  ****"
             ],
-            "triste": [
-                "   (T_T)",
-                "    | |",
-                "   / \\"
+            "rayo": [
+                "    **",
+                "   **",
+                "  ****",
+                "    **",
+                "   **",
+                "  **"
             ],
-            "pulgar": [
-                "    ___",
-                "   /   \\",
-                "  |  👍  |",
-                "   \\___/",
-                "     |"
+            "casa": [
+                "    /\\",
+                "   /  \\",
+                "  /____\\",
+                "  |    |",
+                "  | [] |",
+                "  |____|"
+            ],
+            "triangulo": [
+                "     *",
+                "    * *",
+                "   *   *",
+                "  *     *",
+                " *********"
             ]
         }
     
@@ -105,11 +117,11 @@ class AnimatedOLED:
         with canvas(self.device) as draw:
             draw.rectangle(self.device.bounding_box, outline="black", fill="black")
             
-            # Centrar la cara
-            y_start = 15
+            # Centrar la cara (fuente mas pequeña)
+            y_start = 20
             for i, linea in enumerate(cara):
                 x = (OLED_WIDTH - len(linea) * 6) // 2
-                draw.text((x, y_start + i * 12), linea, fill="white")
+                draw.text((x, y_start + i * 10), linea, fill="white")
     
     def dibujar_figura(self, nombre_figura):
         """Dibuja una figura específica"""
@@ -121,16 +133,14 @@ class AnimatedOLED:
         with canvas(self.device) as draw:
             draw.rectangle(self.device.bounding_box, outline="black", fill="black")
             
-            # Título
-            titulo = f"< {nombre_figura.upper()} >"
-            x_titulo = (OLED_WIDTH - len(titulo) * 6) // 2
-            draw.text((x_titulo, 0), titulo, fill="white")
+            # Titulo simple
+            draw.text((2, 2), nombre_figura.upper(), fill="white")
             
             # Centrar la figura
-            y_start = 20
+            y_start = 18
             for i, linea in enumerate(figura):
                 x = (OLED_WIDTH - len(linea) * 6) // 2
-                draw.text((x, y_start + i * 8), linea, fill="white")
+                draw.text((x, y_start + i * 10), linea, fill="white")
         
         return True
     
