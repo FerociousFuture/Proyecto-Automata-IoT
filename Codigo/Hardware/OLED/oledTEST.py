@@ -15,14 +15,11 @@ OLED_ADDRESS = 0x3C
 OLED_WIDTH = 128
 OLED_HEIGHT = 64
 
-# --- RUTAS DE ARCHIVOS DE VIDEO (Ajustar según sea necesario) ---
-# **IMPORTANTE:** Estos archivos de video deben existir en el mismo directorio
-# o proporcionar la ruta completa en su sistema.
-IDLE_VIDEO_PATH = "Caras/idle.mp4"
-BLINK_VIDEO_PATH = "Caras/Parpadeo.mp4"
+# --- RUTAS DE ARCHIVOS DE VIDEO (AJUSTADAS PARA LA CARPETA 'Caras') ---
+IDLE_VIDEO_PATH = "Caras/idle.mp4"        # Ruta ajustada
+BLINK_VIDEO_PATH = "Caras/Parpadeo.mp4"   # Ruta ajustada
 
 # --- FRAME RATE DE LA ANIMACIÓN ---
-# Si los videos son muy largos, puede ser necesario ajustar esto
 ANIMATION_FPS = 20
 FRAME_DELAY = 1.0 / ANIMATION_FPS
 
@@ -38,20 +35,20 @@ class AnimatedOLED:
         self.running = True
         self.frame = 0
         
-        # --- NUEVA LÓGICA DE CARGA DE FRAMES DE VIDEO ---
-        # Cargar frames para el modo 'idle' y 'parpadeando'
+        # --- LÓGICA DE CARGA DE FRAMES DE VIDEO ---
         idle_frames = self.load_video_frames(IDLE_VIDEO_PATH)
         blink_frames = self.load_video_frames(BLINK_VIDEO_PATH)
         
-        # Combinar las animaciones para simular el ciclo del modo idle
-        # Esto permite una transición fluida si los videos están bien diseñados
+        # Combinar las animaciones: idle + Parpadeo (x2) para ciclo inactivo
+        # Si idle.mp4 es la animación normal y Parpadeo.mp4 es un parpadeo,
+        # esto crea la secuencia: Normal -> Parpadeo -> Normal -> Parpadeo -> Normal...
         self.idle_frames = idle_frames + blink_frames * 2
         
         # Diccionario de figuras disponibles (mantenemos el ASCII para compatibilidad)
         self.figuras = {
             "cubo": ["   +---+", "  /   /|", " +---+ |", " |   | +", " |   |/", " +---+" ],
             "flecha": ["    ^", "   |||", "   |||", "   |||", " =======" ],
-            "check": ["       *", "      **", " * **", "  * **", "   **", "   *" ],
+            "check": ["       *", "      **", " * * * *", "  * **", "   **", "   *" ],
             "cruz": ["  * *", "   * *", "    *", "   * *", "  * *" ],
             "circulo": ["  ****", " * *", "* *", " * *", "  ****" ],
             "rayo": ["    **", "   **", "  ****", "    **", "   **", "  **" ],
@@ -66,9 +63,10 @@ class AnimatedOLED:
             # Crear un frame de error simple (fondo negro con "X" blanca)
             image_error = Image.new('1', (OLED_WIDTH, OLED_HEIGHT), 0)
             draw_error = canvas(image_error)
-            draw_error.text((20, 20), "NO VIDEO FILE", fill=1)
-            draw_error.text((20, 30), video_path.split('/')[-1], fill=1)
-            return [image_error] * 10 # 10 frames de error
+            # Para la pantalla 128x64, usamos una fuente más pequeña para el mensaje de error.
+            draw_error.text((5, 5), "NO VIDEO FILE:", fill=1)
+            draw_error.text((5, 15), video_path, fill=1)
+            return [image_error] * ANIMATION_FPS # Suficientes frames para 1 segundo
             
         cap = cv2.VideoCapture(video_path)
         frames = []
@@ -85,6 +83,7 @@ class AnimatedOLED:
             gray_frame = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2GRAY)
             
             # 3. Aplicar umbral para obtener blanco y negro (monocromático, modo '1')
+            # El umbral 127 es estándar, se puede ajustar para un mejor contraste.
             _, monochrome_frame = cv2.threshold(gray_frame, 127, 255, cv2.THRESH_BINARY)
             
             # 4. Convertir a imagen PIL en modo '1'
@@ -97,30 +96,23 @@ class AnimatedOLED:
 
     def dibujar_idle(self):
         """Dibuja el frame actual de la animación idle (video)."""
-        if not self.idle_frames:
-            # Dibuja un mensaje de error si no hay frames (ya manejado en load_video_frames,
-            # pero es un fallback seguro)
-            with canvas(self.device) as draw:
-                draw.text((20, 20), "ERROR FATAL FRAMES", fill="white")
-            return
-
         # Seleccionar el frame actual de la animación de video
         current_frame_index = self.frame % len(self.idle_frames)
         frame_image = self.idle_frames[current_frame_index]
         
-        # Usamos canvas para dibujar la imagen completa sobre la pantalla
-        with canvas(self.device) as draw:
-            # draw.paste() pega la imagen PIL monocromática sobre el canvas.
-            draw.paste(frame_image, (0, 0))
-
+        # Pegar la imagen PIL monocromática directamente sobre el dispositivo.
+        # Esto es más eficiente que usar draw.paste() con canvas.
+        self.device.display(frame_image) 
+        
     def dibujar_figura(self, nombre_figura):
         """Dibuja una figura específica (mantenemos la lógica ASCII original)."""
-        # ... Lógica de dibujo ASCII original ...
         if nombre_figura not in self.figuras:
             return False
         
         figura = self.figuras[nombre_figura]
         
+        # NOTA: La librería luma.oled es lenta para dibujar ASCII. Si se requiere más
+        # eficiencia, estas figuras deberían convertirse a bitmaps pre-renderizados.
         with canvas(self.device) as draw:
             draw.rectangle(self.device.bounding_box, outline="black", fill="black")
             
@@ -130,6 +122,7 @@ class AnimatedOLED:
             # Centrar la figura
             y_start = 18
             for i, linea in enumerate(figura):
+                # La fuente predeterminada es de 6x8, por eso la multiplicación por 6
                 x = (OLED_WIDTH - len(linea) * 6) // 2
                 draw.text((x, y_start + i * 10), linea, fill="white")
         
@@ -155,16 +148,23 @@ class AnimatedOLED:
             return False
     
     def loop_animacion(self):
-        """Loop principal de animación (ahora controla el frame rate del video)."""
+        """Loop principal de animación (controla el frame rate del video)."""
         while self.running:
+            start_time = time.time()
+            
             if self.modo == "idle":
-                # La velocidad de la animación ahora se controla por FRAME_DELAY
                 self.dibujar_idle()
                 self.frame += 1
-                time.sleep(FRAME_DELAY)
+                
+                # Control de velocidad (para mantener el FPS constante)
+                elapsed_time = time.time() - start_time
+                sleep_time = FRAME_DELAY - elapsed_time
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
             else:
-                time.sleep(0.1)  # En modo figura, solo esperar
-    
+                time.sleep(0.1) # En modo figura, solo esperar para no consumir CPU
+
+    # Métodos restantes (iniciar, detener, listar_figuras) sin cambios...
     def iniciar(self):
         """Inicia el loop de animación en un thread."""
         thread = threading.Thread(target=self.loop_animacion, daemon=True)
@@ -184,18 +184,17 @@ class AnimatedOLED:
 # --- PROGRAMA PRINCIPAL ---
 if __name__ == "__main__":
     try:
-        # Requerir las librerías al inicio
-        print("Revisando dependencias: OpenCV (cv2) y PIL son necesarias para este código.")
-        
-        print("Iniciando OLED animado...")
+        # Se asume que las librerías cv2 y PIL están instaladas.
+        print("Iniciando OLED animado con videos...")
         oled = AnimatedOLED()
         
         # Iniciar animación
         oled.iniciar()
         
         print("\n=== COMANDOS DISPONIBLES ===")
-        print(f"FPS de la animación de video: {ANIMATION_FPS} ({FRAME_DELAY:.2f}s/frame)")
-        print("Escribe el nombre de una figura para mostrarla:")
+        print(f"Videos cargados de: {IDLE_VIDEO_PATH} y {BLINK_VIDEO_PATH}")
+        print(f"FPS de la animación de video: {ANIMATION_FPS}")
+        print("Escribe el nombre de una figura (ASCII) para mostrarla temporalmente:")
         print(f"Figuras: {', '.join(oled.listar_figuras())}")
         print("Escribe 'salir' para terminar\n")
         
@@ -217,4 +216,4 @@ if __name__ == "__main__":
         
     except Exception as e:
         print(f"ERROR: {e}")
-        print("\nAsegúrate de tener instaladas las librerías 'opencv-python' y 'Pillow'.")
+        print("\nVerifica las dependencias (opencv-python, Pillow) y las rutas de los videos.")
