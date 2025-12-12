@@ -1,0 +1,70 @@
+body {
+    font-family: 'Arial', sans-serif;
+    background-color: #f4f4f4;
+    color: #333;
+    margin: 0;
+}
+.header {
+    background-color: #003366; /* Azul oscuro del proyecto */
+    color: #FFD43B; /* Dorado */
+    padding: 20px;
+    text-align: center;
+}
+.container {
+    max-width: 1200px;
+    margin: 20px auto;
+    padding: 0 20px;
+    display: grid;
+    grid-template-columns: 1fr 1fr; /* Dos columnas principales */
+    gap: 20px;
+}
+.card {
+    background-color: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+h2 {
+    color: #0077b6; /* Azul brillante */
+    border-bottom: 2px solid #eee;
+    padding-bottom: 10px;
+    margin-top: 0;
+}
+/* Tabla de Gestos */
+.gesture-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.gesture-table th, .gesture-table td {
+    border: 1px solid #ddd;
+    padding: 10px;
+    text-align: left;
+}
+.gesture-table th {
+    background-color: #003366;
+    color: white;
+}
+.gesture-table tr:nth-child(even) {
+    background-color: #f9f9f9;
+}
+/* Botones de acción */
+.practice-btn, #train_btn {
+    background-color: #0077b6;
+    color: white;
+    border: none;
+    padding: 8px 15px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+.practice-btn:hover, #train_btn:hover {
+    background-color: #023e8a;
+}
+#visual_feedback {
+    min-height: 150px;
+    background-color: #f0f0f0;
+    border: 1px solid #ccc;
+    margin-top: 15px;
+    padding: 10px;
+    text-align: center;
+}

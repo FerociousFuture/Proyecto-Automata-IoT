@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Gestión de Gestos - Autómata IA</title>
+    <link rel="stylesheet" href="panel_style.css">
+</head>
+<body>
+    <div class="header">
+        <h1>Panel de Control de Gestos 🪄</h1>
+        <p>Gestión y Práctica de Modelos de Inteligencia Artificial</p>
+    </div>
+
+    <div class="container">
+        <section class="card status-card">
+            <h2><i class="fas fa-brain"></i> Modelos de IA</h2>
+            <p>Estado: <span id="model_status">Cargando...</span></p>
+            <p>Último Modelo Entrenado: <span id="last_model">N/A</span></p>
+            <button id="train_btn" onclick="triggerTraining()">ENTRENAR NUEVOS GESTOS</button>
+        </section>
+
+        <section class="card gesture-card">
+            <h2><i class="fas fa-hand-rock"></i> Practicar Gestos Básicos</h2>
+            <div id="gesture_list_container">
+                </div>
+        </section>
+        
+        <section class="card practice-feedback">
+            <h2>Retroalimentación</h2>
+            <div id="feedback_display">
+                <p>Selecciona un gesto para ver el patrón de movimiento.</p>
+                <div id="visual_feedback">
+                    </div>
+            </div>
+        </section>
+    </div>
+    
+    <script src="panel_script.js"></script>
+</body>
+</html>
