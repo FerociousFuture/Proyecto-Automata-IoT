@@ -1,41 +1,60 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Panel de Gestión de Gestos - Autómata IA</title>
-    <link rel="stylesheet" href="panel_style.css">
+    <title>Grimorio de Hechizos - Práctica de Varita</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="panel_style_hp.css"> 
 </head>
 <body>
     <div class="header">
-        <h1>Panel de Control de Gestos 🪄</h1>
-        <p>Gestión y Práctica de Modelos de Inteligencia Artificial</p>
+        <h1>✨ Grimorio de Hechizos ✨</h1>
+        <p>Aprende y practica los movimientos de tu varita mágica.</p>
     </div>
 
     <div class="container">
         <section class="card status-card">
-            <h2><i class="fas fa-brain"></i> Modelos de IA</h2>
-            <p>Estado: <span id="model_status">Cargando...</span></p>
-            <p>Último Modelo Entrenado: <span id="last_model">N/A</span></p>
-            <button id="train_btn" onclick="triggerTraining()">ENTRENAR NUEVOS GESTOS</button>
+            <h2><i class="fas fa-magic"></i> Estatus de la Varita</h2>
+            <div class="status-grid">
+                <p>Modelo Activo: <span id="model_status">Clasificador M-L</span></p>
+                <p>Hechizos Dominados: <span id="trained_count">--</span></p>
+            </div>
+            <div class="log-display">
+                <h3>Registro de Práctica</h3>
+                <pre id="practice_log">Esperando selección de hechizo...</pre>
+            </div>
         </section>
 
         <section class="card gesture-card">
-            <h2><i class="fas fa-hand-rock"></i> Practicar Gestos Básicos</h2>
-            <div id="gesture_list_container">
-                </div>
-        </section>
-        
-        <section class="card practice-feedback">
-            <h2>Retroalimentación</h2>
-            <div id="feedback_display">
-                <p>Selecciona un gesto para ver el patrón de movimiento.</p>
-                <div id="visual_feedback">
-                    </div>
-            </div>
+            <h2>📜 Hechizos Disponibles</h2>
+            <table class="gesture-table" id="gesture_table">
+                <thead>
+                    <tr>
+                        <th>Hechizo</th>
+                        <th>Patrón de Movimiento</th>
+                        <th>Efecto (IoT)</th>
+                        <th>Dominio</th>
+                        <th>Acción</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    </tbody>
+            </table>
         </section>
     </div>
+
+    <div id="visual_feedback" class="modal-window" onclick="closeModal()">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <span class="close-btn" onclick="closeModal()">&times;</span>
+            <h2 id="feedback_title"></h2>
+            <p id="feedback_description"></p>
+            <div id="pattern_display">
+                <img id="pattern_img" src="" alt="Patrón del Gesto">
+            </div>
+            <p class="instruction">Pulsa ESC o haz clic fuera para cerrar.</p>
+        </div>
+    </div>
     
-    <script src="panel_script.js"></script>
+    <script src="panel_script_hp.js"></script>
 </body>
 </html>

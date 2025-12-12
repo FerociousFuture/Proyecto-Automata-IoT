@@ -1,70 +1,170 @@
-body {
-    font-family: 'Arial', sans-serif;
-    background-color: #f4f4f4;
-    color: #333;
-    margin: 0;
+/* Estilos basados en la paleta temática de tu proyecto */
+:root {
+    --color-primary: #003366; /* Azul Oscuro */
+    --color-secondary: #FFD43B; /* Dorado / Amarillo */
+    --color-accent: #0077b6; /* Azul Brillante */
+    --color-bg: #f4f4f4;
+    --font-theme: 'Cinzel', serif; /* Fuente mágica */
 }
-.header {
-    background-color: #003366; /* Azul oscuro del proyecto */
-    color: #FFD43B; /* Dorado */
-    padding: 20px;
+
+html {
+    font-family: Arial, sans-serif;
     text-align: center;
 }
+body {
+    background-color: var(--color-bg);
+    margin: 0;
+}
+
+/* Encabezado Temático */
+.header {
+    overflow: hidden;
+    background-color: var(--color-primary);
+    color: var(--color-secondary);
+    padding: 30px 20px;
+}
+.header h1 {
+    font-family: var(--font-theme);
+    font-size: 2.5rem;
+    margin: 0;
+}
+.header p {
+    margin-top: 5px;
+    font-style: italic;
+    font-size: 1.1rem;
+}
+
 .container {
-    max-width: 1200px;
+    max-width: 1300px;
     margin: 20px auto;
-    padding: 0 20px;
     display: grid;
-    grid-template-columns: 1fr 1fr; /* Dos columnas principales */
+    grid-template-columns: 350px 1fr; /* Columna de estatus estrecha + Tabla ancha */
     gap: 20px;
+    padding: 0 10px;
 }
 .card {
     background-color: white;
     padding: 20px;
-    border-radius: 8px;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    border-radius: 12px;
+    box-shadow: 0 4px 15px rgba(0, 51, 102, 0.15); /* Sombra temática */
 }
 h2 {
-    color: #0077b6; /* Azul brillante */
-    border-bottom: 2px solid #eee;
+    color: var(--color-accent);
+    font-family: var(--font-theme);
+    font-weight: 700;
+    border-bottom: 2px solid var(--color-secondary);
     padding-bottom: 10px;
     margin-top: 0;
 }
+.status-card {
+    text-align: left;
+}
+.status-grid p {
+    font-size: 1rem;
+    font-weight: bold;
+    margin: 5px 0;
+}
+.log-display {
+    background-color: #333;
+    color: #00ff40; /* Verde de consola/matrix */
+    border-radius: 8px;
+    padding: 10px;
+    margin-top: 20px;
+    text-align: left;
+}
+#practice_log {
+    white-space: pre-wrap; /* Permite saltos de línea */
+    font-size: 0.9rem;
+}
+
 /* Tabla de Gestos */
 .gesture-table {
     width: 100%;
-    border-collapse: collapse;
-}
-.gesture-table th, .gesture-table td {
-    border: 1px solid #ddd;
-    padding: 10px;
-    text-align: left;
+    border-collapse: separate;
+    border-spacing: 0;
+    border-radius: 10px;
+    overflow: hidden; /* Para que el radio se aplique */
 }
 .gesture-table th {
-    background-color: #003366;
-    color: white;
+    background-color: var(--color-primary);
+    color: var(--color-secondary);
+    padding: 12px 8px;
+    font-family: var(--font-theme);
 }
-.gesture-table tr:nth-child(even) {
-    background-color: #f9f9f9;
+.gesture-table td {
+    padding: 10px 8px;
+    border-bottom: 1px solid #ddd;
+    vertical-align: middle;
 }
-/* Botones de acción */
-.practice-btn, #train_btn {
-    background-color: #0077b6;
+.gesture-table tr:hover {
+    background-color: #e0f2ff; /* Resaltar fila al pasar el mouse */
+}
+.status-trained {
+    color: green;
+    font-weight: bold;
+}
+.status-untrained {
+    color: orange;
+    font-weight: bold;
+}
+
+/* Botón de Práctica */
+.practice-btn {
+    background-color: var(--color-accent);
     color: white;
     border: none;
     padding: 8px 15px;
     border-radius: 4px;
     cursor: pointer;
+    font-weight: bold;
     transition: background-color 0.3s;
 }
-.practice-btn:hover, #train_btn:hover {
-    background-color: #023e8a;
+.practice-btn:hover {
+    background-color: #005f96;
 }
-#visual_feedback {
-    min-height: 150px;
-    background-color: #f0f0f0;
-    border: 1px solid #ccc;
-    margin-top: 15px;
+
+/* Estilo del Modal (Retroalimentación Visual) */
+.modal-window {
+    display: none; /* Oculto por defecto */
+    position: fixed;
+    z-index: 100;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0,0,0,0.8);
+}
+.modal-content {
+    background-color: white;
+    margin: 10% auto; /* Centrar verticalmente */
+    padding: 30px;
+    border-radius: 10px;
+    width: 80%;
+    max-width: 600px;
+    position: relative;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+}
+.close-btn {
+    color: #aaa;
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+}
+#pattern_display {
+    margin-top: 20px;
     padding: 10px;
-    text-align: center;
+    background-color: #f0f0f0;
+    border-radius: 5px;
+}
+#pattern_img {
+    max-width: 90%;
+    height: auto;
+    border: 1px solid #ccc;
+}
+.instruction {
+    font-style: italic;
+    color: #666;
+    font-size: 0.9em;
 }
