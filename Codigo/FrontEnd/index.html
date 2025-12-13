@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control Autómata IoT - Magic Wand</title>
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <div id="auth-overlay">
+        <div id="login-form" class="auth-card">
+            <span class="material-icons" style="font-size: 40px; color: var(--primary-color);">lock</span>
+            <h2>Iniciar Sesión</h2>
+            <p style="font-size: 0.9em; color: #aaa;">Accede para controlar el autómata</p>
+            <input type="text" id="log-user" class="auth-input" placeholder="Usuario">
+            <input type="password" id="log-pass" class="auth-input" placeholder="Contraseña">
+            <div id="log-error" class="error-msg"></div>
+            <button class="auth-btn" onclick="login()">Entrar</button>
+            <div class="toggle-text" onclick="toggleAuth()">¿No tienes cuenta? Regístrate</div>
+        </div>
+
+        <div id="reg-form" class="auth-card" style="display: none;">
+            <span class="material-icons" style="font-size: 40px; color: var(--secondary-color);">person_add</span>
+            <h2>Crear Cuenta</h2>
+            <input type="text" id="reg-name" class="auth-input" placeholder="Nombre Completo">
+            <input type="text" id="reg-user" class="auth-input" placeholder="Usuario">
+            <input type="password" id="reg-pass" class="auth-input" placeholder="Contraseña">
+            <div id="reg-error" class="error-msg"></div>
+            <button class="auth-btn" onclick="register()">Registrarse</button>
+            <div class="toggle-text" onclick="toggleAuth()">¿Ya tienes cuenta? Inicia sesión</div>
+        </div>
+    </div>
+
+    <header>
+        <div class="logo">
+            <span class="material-icons">auto_fix_high</span>
+            Magic Wand IoT
+        </div>
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <span id="user-display">Invitado</span>
+            <button onclick="logout()" class="logout-btn">
+                Salir
+            </button>
+        </div>
+    </header>
+
+    <div class="main-layout">
+        <aside>
+            <button class="nav-btn active" onclick="nav('dashboard')">
+                <span class="material-icons">dashboard</span> Panel General
+            </button>
+            <button class="nav-btn" onclick="nav('trace')">
+                <span class="material-icons">gesture</span> Dibujo de Robot
+            </button>
+            <button class="nav-btn" onclick="nav('mqtt')">
+                <span class="material-icons">router</span> Dispositivos MQTT
+            </button>
+            <button class="nav-btn" onclick="nav('tutorials')">
+                <span class="material-icons">menu_book</span> Tutoriales
+            </button>
+            <button class="nav-btn" onclick="nav('info')">
+                <span class="material-icons">info</span> Descripción Proyecto
+            </button>
+        </aside>
+
+        <main>
+            <div id="dashboard" class="section active">
+                <div class="card">
+                    <h2>Estado del Autómata</h2>
+                    <div style="display: flex; justify-content: space-around; text-align: center;">
+                        <div>
+                            <span class="material-icons" style="font-size: 40px; color: gold;">light_mode</span>
+                            <p>Iluminación: <strong>Lumos</strong></p>
+                        </div>
+                        <div>
+                            <span class="material-icons" style="font-size: 40px; color: var(--success-color);">battery_std</span>
+                            <p>Batería: <strong>85%</strong></p>
+                        </div>
+                        <div>
+                            <span class="material-icons" style="font-size: 40px; color: var(--secondary-color);">wifi</span>
+                            <p>MQTT: <strong>Conectado</strong></p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>Historial de Comandos Recientes</h2>
+                    <p style="color: #aaa; font-size: 0.9em;">Registro en tiempo real de los hechizos detectados y su descripción.</p>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Hora</th>
+                                <th>Comando Detectado</th>
+                                <th>Descripción de la Acción</th>
+                            </tr>
+                        </thead>
+                        <tbody id="command-log">
+                            <tr>
+                                <td>10:45:12</td>
+                                <td><strong>Lumos</strong></td>
+                                <td>Se encendió la luz del dispositivo autómata.</td>
+                            </tr>
+                            <tr>
+                                <td>10:48:30</td>
+                                <td><strong>Ascendio</strong></td>
+                                <td>Aumentó el volumen del sistema de audio.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="trace" class="section">
+                <h2>Visualizador de Trazos MPU-6050</h2>
+                <div class="card">
+                    <p>Replica visual del movimiento captado por la varita mágica.</p>
+                    <div id="drawing-area">
+                        <span style="color: #666;">(Esperando movimiento...)</span>
+                        <svg class="wand-path" viewBox="0 0 100 100" style="position: absolute; top:0; left:0; width:100%; height:100%; opacity: 0.5;">
+                            <path d="M 30 30 L 70 30 L 30 70 L 70 70" stroke="cyan" stroke-width="2" fill="none" />
+                        </svg>
+                    </div>
+                    <div style="margin-top: 15px; text-align: center;">
+                        <button class="auth-btn" style="width: auto; background: #333;">Limpiar Lienzo</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="mqtt" class="section">
+                <h2>Gestión de Dispositivos IoT</h2>
+                <div class="card">
+                    <h3>Agregar Nuevo Dispositivo</h3>
+                    <div class="device-row">
+                        <input type="text" placeholder="Nombre (ej. Foco)" class="auth-input" style="margin:0;">
+                        <input type="text" placeholder="Topic MQTT" class="auth-input" style="margin:0;">
+                        <button class="auth-btn" style="width: 100px; margin:0;">Agregar</button>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h3>Dispositivos Conectados</h3>
+                    <ul class="device-list" style="list-style: none; padding: 0;">
+                        <li>
+                            <span>💡 Lámpara de Sala</span>
+                            <span style="color: var(--success-color);">En línea</span>
+                        </li>
+                        <li>
+                            <span>🔊 Bocina Inteligente</span>
+                            <span style="color: var(--success-color);">En línea</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <div id="tutorials" class="section">
+                <h2>Libro de Hechizos</h2>
+                <div class="spell-grid">
+                    <div class="spell-card">
+                        <span class="spell-icon">⬆⬇</span>
+                        <h3>Lumos / Nox</h3>
+                        <p>Línea vertical recta.</p>
+                        <small>Control de Luz</small>
+                    </div>
+                    <div class="spell-card">
+                        <span class="spell-icon">⚡</span>
+                        <h3>Avada Kedavra</h3>
+                        <p>Trazo en forma de rayo (Z).</p>
+                        <small>Apagado de Emergencia</small>
+                    </div>
+                    <div class="spell-card">
+                        <span class="spell-icon">↩</span>
+                        <h3>Wingardium Leviosa</h3>
+                        <p>Bucle y subida.</p>
+                        <small>Levitar (Servo Motor)</small>
+                    </div>
+                </div>
+            </div>
+
+            <div id="info" class="section">
+                <h2>Sobre el Proyecto</h2>
+                <div class="card">
+                    <h3>Mascota Robótica IoT & IA</h3>
+                    <p>Este proyecto consiste en un pequeño autómata controlado por una <strong>Raspberry Pi Zero 2 W</strong>. El sistema utiliza un control remoto con forma de "varita mágica" que funciona mediante gestos captados por un sensor <strong>MPU-6050</strong>.</p>
+                    <p><strong>Objetivo:</strong> Servir de puente entre el usuario y dispositivos IoT, permitiendo controlar luces, sonido y movimientos mediante "hechizos" predefinidos.</p>
+                    <p><strong>Tecnologías:</strong> Python, MQTT, SQLite, HTML/CSS.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
