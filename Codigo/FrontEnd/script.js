@@ -1,32 +1,25 @@
-// --- JAVASCRIPT: Lógica de Interfaz ---
+// DIRECCIÓN DEL SERVIDOR PYTHON (BACKEND)
+// Si estás en la misma PC, usa localhost. Si es la Raspberry, usa su IP.
+const API_URL = "http://localhost:5000";
 
-// 1. Navegación
+// --- NAVEGACIÓN (Igual que antes) ---
 function nav(sectionId) {
-    // Oculta todas las secciones
     document.querySelectorAll('.section').forEach(el => el.classList.remove('active'));
-    // Desactiva todos los botones del menú
     document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
-    
-    // Muestra la sección deseada
     document.getElementById(sectionId).classList.add('active');
-    // Activa el botón que fue presionado
-    if (event && event.currentTarget) {
-        event.currentTarget.classList.add('active');
-    }
+    if (event && event.currentTarget) event.currentTarget.classList.add('active');
 }
 
-// 2. Autenticación (Simulada con LocalStorage)
+// --- AUTENTICACIÓN CON PYTHON Y SQLITE ---
+
 function toggleAuth() {
     const login = document.getElementById('login-form');
     const reg = document.getElementById('reg-form');
     
-    // Alternar visibilidad
     if (login.style.display === 'none') {
-        login.style.display = 'block';
-        reg.style.display = 'none';
+        login.style.display = 'block'; reg.style.display = 'none';
     } else {
-        login.style.display = 'none';
-        reg.style.display = 'block';
+        login.style.display = 'none'; reg.style.display = 'block';
     }
     clearErrors();
 }
@@ -36,30 +29,41 @@ function clearErrors() {
     document.getElementById('reg-error').innerText = '';
 }
 
-function register() {
+// FUNCIÓN PARA REGISTRAR (CONECTADA A PYTHON)
+async function register() {
     const name = document.getElementById('reg-name').value;
     const user = document.getElementById('reg-user').value;
     const pass = document.getElementById('reg-pass').value;
 
-    // Validación de campos vacíos
     if(!name || !user || !pass) {
         document.getElementById('reg-error').innerText = "⚠ Llena todos los campos";
         return;
     }
-    
-    // Verificar si existe (Simulación)
-    if(localStorage.getItem('user_' + user)) {
-        document.getElementById('reg-error').innerText = "⚠ Usuario ya existe";
-        return;
-    }
 
-    // Guardar usuario
-    localStorage.setItem('user_' + user, JSON.stringify({name, pass}));
-    alert("✅ Registro exitoso. Inicia sesión.");
-    toggleAuth();
+    try {
+        // Enviamos los datos a Python
+        const response = await fetch(`${API_URL}/registro`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fullName: name, username: user, password: pass })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            alert("✅ " + data.message);
+            toggleAuth();
+        } else {
+            document.getElementById('reg-error').innerText = "❌ " + data.message;
+        }
+    } catch (error) {
+        console.error("Error:", error);
+        document.getElementById('reg-error').innerText = "⚠ Error de conexión con el servidor (¿Está corriendo app.py?)";
+    }
 }
 
-function login() {
+// FUNCIÓN PARA LOGIN (CONECTADA A PYTHON)
+async function login() {
     const user = document.getElementById('log-user').value;
     const pass = document.getElementById('log-pass').value;
 
@@ -68,26 +72,31 @@ function login() {
         return;
     }
 
-    const stored = localStorage.getItem('user_' + user);
-    if(!stored) {
-        document.getElementById('log-error').innerText = "❌ Usuario no encontrado";
-        return;
-    }
+    try {
+        // Preguntamos a Python si el usuario existe
+        const response = await fetch(`${API_URL}/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: user, password: pass })
+        });
 
-    const data = JSON.parse(stored);
-    if(data.pass !== pass) {
-        document.getElementById('log-error').innerText = "❌ Contraseña incorrecta";
-        return;
-    }
+        const data = await response.json();
 
-    // Éxito: Ocultar login y mostrar nombre
-    document.getElementById('auth-overlay').style.display = 'none';
-    document.getElementById('user-display').innerText = data.name;
+        if (data.success) {
+            document.getElementById('auth-overlay').style.display = 'none';
+            document.getElementById('user-display').innerText = data.nombre;
+            // Guardamos sesión temporalmente por si recarga la página
+            sessionStorage.setItem('activeUser', data.nombre);
+        } else {
+            document.getElementById('log-error').innerText = "❌ " + data.message;
+        }
+    } catch (error) {
+        console.error("Error:", error);
+        document.getElementById('log-error').innerText = "⚠ Error de conexión. Asegúrate de ejecutar 'app.py'";
+    }
 }
 
 function logout() {
-    // Limpiar campos y volver a mostrar overlay
-    document.getElementById('log-user').value = '';
-    document.getElementById('log-pass').value = '';
-    document.getElementById('auth-overlay').style.display = 'flex';
+    sessionStorage.removeItem('activeUser');
+    location.reload(); // Recarga la página para reiniciar todo
 }
