@@ -1,17 +1,99 @@
 import sqlite3
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import os
+import threading
+import queue
+import sys
+import time
+
+# Configurar path para importar Entrenamiento
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from Entrenamiento import Entrenamiento
 
 app = Flask(__name__)
-CORS(app) # Permite que tu HTML se conecte con este Python
+CORS(app) 
 
-# Nombre del archivo de base de datos
 DB_NAME = "usuarios.db"
 
-# --- 1. CONFIGURACIÓN DE LA BASE DE DATOS ---
+# --- CONFIGURACIÓN SERIAL ---
+# IMPORTANTE: Asegúrate que este puerto es correcto en tu Raspberry Pi
+# En Windows suele ser 'COM3', 'COM4'. En Linux/RPi '/dev/ttyUSB0' o '/dev/ttyACM0'
+PORT_SERIAL = '/dev/ttyUSB0' 
+BAUD_RATE = 115200
+
+# --- VARIABLES GLOBALES DE HILO DE IA ---
+detection_thread = None
+stop_event = threading.Event()
+message_queue = queue.Queue()
+
+def backend_callback(json_msg):
+    """
+    Esta función es llamada por Entrenamiento.py cada vez que hay un log o detección.
+    Recibe un string JSON.
+    """
+    message_queue.put(json_msg)
+
+def run_ai_service():
+    """Función que corre en el thread secundario"""
+    try:
+        # Llamamos al detector pasándole nuestra función de callback
+        Entrenamiento.run_detector(
+            serial_port=PORT_SERIAL, 
+            baud_rate=BAUD_RATE, 
+            message_callback=backend_callback
+        )
+    except Exception as e:
+        print(f"Error en hilo de IA: {e}")
+
+# --- RUTAS DE LA APP ---
+
+@app.route('/')
+def index():
+    # Sirve el index.html principal
+    return send_from_directory('../FrontEnd', 'index.html')
+
+@app.route('/<path:filename>')
+def serve_static(filename):
+    # Sirve CSS, JS e imágenes
+    return send_from_directory('../FrontEnd', filename)
+
+@app.route('/api/start_practice', methods=['POST'])
+def start_practice():
+    global detection_thread
+    
+    if detection_thread is not None and detection_thread.is_alive():
+        return jsonify({"success": True, "message": "El servicio de detección ya está activo."})
+    
+    # Limpiar cola vieja
+    with message_queue.mutex:
+        message_queue.queue.clear()
+    
+    detection_thread = threading.Thread(target=run_ai_service, daemon=True)
+    detection_thread.start()
+    
+    return jsonify({"success": True, "message": "Servicio de detección iniciado."})
+
+@app.route('/api/get_live_logs', methods=['GET'])
+def get_live_logs():
+    """
+    El frontend consulta esto periódicamente para obtener nuevos eventos.
+    """
+    messages = []
+    # Sacar todos los mensajes pendientes de la cola
+    try:
+        while not message_queue.empty():
+            # Obtener mensaje sin bloquear
+            msg = message_queue.get_nowait()
+            messages.append(msg)
+    except queue.Empty:
+        pass
+    
+    return jsonify({"logs": messages})
+
+# --- GESTIÓN DE USUARIOS (SQLite) ---
+
 def init_db():
-    """Crea la tabla de usuarios si no existe"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
@@ -24,57 +106,37 @@ def init_db():
     ''')
     conn.commit()
     conn.close()
-    print("Base de datos inicializada correctamente.")
-
-# --- 2. RUTAS (EL PUENTE CON EL HTML) ---
 
 @app.route('/registro', methods=['POST'])
 def registrar_usuario():
     data = request.json
-    nombre = data.get('fullName')
-    user = data.get('username')
-    pwd = data.get('password')
-
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
-        # Intentamos guardar el usuario
         cursor.execute("INSERT INTO usuarios (nombre_completo, usuario, password) VALUES (?, ?, ?)", 
-                       (nombre, user, pwd))
+                       (data['fullName'], data['username'], data['password']))
         conn.commit()
         conn.close()
-        return jsonify({"success": True, "message": "Usuario registrado exitosamente"})
-    except sqlite3.IntegrityError:
-        # Esto pasa si el usuario ya existe (porque pusimos UNIQUE)
-        return jsonify({"success": False, "message": "El nombre de usuario ya existe"})
+        return jsonify({"success": True, "message": "Usuario creado."})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
 
 @app.route('/login', methods=['POST'])
 def login_usuario():
     data = request.json
-    user = data.get('username')
-    pwd = data.get('password')
-
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    # Buscamos si existe alguien con ese usuario Y contraseña
-    cursor.execute("SELECT nombre_completo FROM usuarios WHERE usuario=? AND password=?", (user, pwd))
-    resultado = cursor.fetchone()
+    cursor.execute("SELECT nombre_completo FROM usuarios WHERE usuario=? AND password=?", 
+                   (data['username'], data['password']))
+    row = cursor.fetchone()
     conn.close()
+    
+    if row:
+        return jsonify({"success": True, "nombre": row[0]})
+    return jsonify({"success": False, "message": "Credenciales inválidas"})
 
-    if resultado:
-        # resultado[0] es el nombre completo
-        return jsonify({"success": True, "nombre": resultado[0]})
-    else:
-        return jsonify({"success": False, "message": "Usuario o contraseña incorrectos"})
-
-# --- 3. ARRANCAR EL SERVIDOR ---
 if __name__ == '__main__':
-    # Verificar que la DB existe antes de arrancar
     if not os.path.exists(DB_NAME):
         init_db()
-    
-    # Arrancar en el puerto 5000
-    print("Servidor corriendo... Esperando conexiones del Frontend.")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Ejecutar servidor accesible desde la red local
+    app.run(debug=True, host='0.0.0.0', port=8001, use_reloader=False)
