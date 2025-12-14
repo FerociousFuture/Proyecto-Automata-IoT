@@ -10,19 +10,22 @@ from scipy.spatial.distance import euclidean
 from sklearn.preprocessing import StandardScaler
 
 # --- CONFIGURACIÓN GLOBAL ---
+# Usamos rutas absolutas para que funcione bien tanto desde terminal como desde Flask
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, 'gesture_models') 
 
 SENSOR_COLS = ['Gyro_X', 'Gyro_Y', 'Gyro_Z', 'Acc_X', 'Acc_Y', 'Acc_Z']
 NUM_SENSOR_VALUES = 6
+HEADER = "Gyro_X,Gyro_Y,Gyro_Z,Acc_X,Acc_Y,Acc_Z\n"
 
 # --- PARÁMETROS DE DETECCIÓN ---
-TEMPLATE_LENGTH = 80        
-DETECTION_WINDOW = 100      
-STEP_SIZE = 5               
-DTW_THRESHOLD = 150.0       
-MIN_ACTIVITY = 0.08         
-COOLDOWN_SAMPLES = 40       
+TEMPLATE_LENGTH = 80        # Longitud de la secuencia template
+DETECTION_WINDOW = 100      # Ventana de búsqueda en tiempo real
+STEP_SIZE = 5               # Paso de evaluación (cada 5 muestras)
+DTW_THRESHOLD = 150.0       # Umbral de similitud (menor es más estricto)
+MIN_ACTIVITY = 0.08         # Filtro de ruido/reposo
+COOLDOWN_SAMPLES = 40       # Tiempo de espera tras detección
+SIMILARITY_MARGIN = 30.0    # Margen para diferenciar entre gestos similares
 
 realtime_buffer = []
 cooldown_counter = 0
@@ -30,12 +33,15 @@ cooldown_counter = 0
 if not os.path.exists(MODELS_DIR):
     os.makedirs(MODELS_DIR)
 
-# --- FUNCIONES DE UTILIDAD ---
+# --- FUNCIONES DE MATEMÁTICAS Y PROCESAMIENTO ---
+
 def normalize_sequence(sequence):
+    """Normaliza los datos para que la escala no afecte la comparación."""
     scaler = StandardScaler()
     return scaler.fit_transform(sequence)
 
 def dtw_distance(seq1, seq2):
+    """Dynamic Time Warping: Compara dos secuencias temporales."""
     n, m = len(seq1), len(seq2)
     dtw_matrix = np.full((n + 1, m + 1), np.inf)
     dtw_matrix[0, 0] = 0
@@ -51,6 +57,7 @@ def dtw_distance(seq1, seq2):
     return dtw_matrix[n, m]
 
 def extract_temporal_features(data):
+    """Calcula magnitudes y combina con datos crudos."""
     data_df = pd.DataFrame(data, columns=SENSOR_COLS)
     gyro_mag = np.sqrt(data_df['Gyro_X']**2 + data_df['Gyro_Y']**2 + data_df['Gyro_Z']**2)
     acc_mag = np.sqrt(data_df['Acc_X']**2 + data_df['Acc_Y']**2 + data_df['Acc_Z']**2)
@@ -61,242 +68,297 @@ def extract_temporal_features(data):
     ])
     return temporal_features
 
+def clean_and_validate_csv(df):
+    """Limpia filas corruptas o con valores extremos del CSV."""
+    original_len = len(df)
+    for col in SENSOR_COLS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    df_clean = df.dropna(subset=SENSOR_COLS)
+    
+    # Filtro de valores extremos (ruido eléctrico)
+    for col in SENSOR_COLS:
+        if 'Gyro' in col:
+            df_clean = df_clean[(df_clean[col] >= -3000) & (df_clean[col] <= 3000)]
+        else: 
+            df_clean = df_clean[(df_clean[col] >= -200) & (df_clean[col] <= 200)]
+    
+    if len(df_clean) < original_len:
+        print(f"⚠️  Limpieza: Se eliminaron {original_len - len(df_clean)} filas corruptas.")
+    
+    return df_clean
+
+# --- GESTIÓN DE ARCHIVOS Y MODELOS ---
+
+def get_gesture_path(gesture_name):
+    return os.path.join(MODELS_DIR, f"{gesture_name}.pkl")
+
+def list_trained_gestures():
+    if not os.path.exists(MODELS_DIR):
+        return []
+    return [f.replace('.pkl', '') for f in os.listdir(MODELS_DIR) if f.endswith('.pkl')]
+
 def load_gesture(gesture_name):
-    gesture_path = os.path.join(MODELS_DIR, f"{gesture_name}.pkl")
-    if not os.path.exists(gesture_path):
-        return None
-    return joblib.load(gesture_path)
+    path = get_gesture_path(gesture_name)
+    if not os.path.exists(path): return None
+    return joblib.load(path)
 
 def load_all_gestures():
     gestures = {}
-    if not os.path.exists(MODELS_DIR):
-        return gestures
-    files = [f.replace('.pkl', '') for f in os.listdir(MODELS_DIR) if f.endswith('.pkl')]
-    for name in files:
+    for name in list_trained_gestures():
         gestures[name] = load_gesture(name)
     return gestures
 
-# --- FASE 2: DETECCIÓN EN TIEMPO REAL ---
-def run_detector(serial_port, baud_rate, target_gestures=None, message_callback=None, data_callback=None):
-    """
-    message_callback: Para eventos importantes (Hechizo detectado, errores)
-    data_callback: Para flujo de datos crudos (Dibujo en tiempo real)
-    """
-    global realtime_buffer, cooldown_counter
-    
-    def emit_log(text_msg, type="info", data=None):
-        print(f"[{type.upper()}] {text_msg}")
-        if message_callback:
-            payload = {
-                "text": text_msg,
-                "type": type,
-                "data": data,
-                "timestamp": time.time()
-            }
-            message_callback(json.dumps(payload))
-
-    if target_gestures is None:
-        all_gestures = load_all_gestures()
+def delete_gesture(gesture_name):
+    path = get_gesture_path(gesture_name)
+    if os.path.exists(path):
+        os.remove(path)
+        print(f"✅ Gesto '{gesture_name}' eliminado.")
     else:
-        all_gestures = {}
-        for gesture_name in target_gestures:
-            gd = load_gesture(gesture_name)
-            if gd: all_gestures[gesture_name] = gd
+        print(f"❌ Gesto '{gesture_name}' no encontrado.")
+
+# --- FASE 1: ENTRENAMIENTO (RESTORED) ---
+
+def train_model(csv_file, gesture_name=None):
+    if gesture_name is None:
+        gesture_name = os.path.splitext(os.path.basename(csv_file))[0]
     
-    if not all_gestures:
-        emit_log("No se encontraron modelos.", "error")
+    try:
+        df = pd.read_csv(csv_file)
+        print(f"✅ CSV cargado: {len(df)} filas.")
+    except Exception as e:
+        print(f"❌ Error leyendo CSV: {e}")
         return
 
-    template_length = list(all_gestures.values())[0]['template_length']
+    df = clean_and_validate_csv(df)
+    
+    if len(df) < TEMPLATE_LENGTH:
+        print(f"❌ Error: Insuficientes datos ({len(df)}). Mínimo requerido: {TEMPLATE_LENGTH}")
+        return
+
+    # Buscar el segmento con mayor actividad
+    df['Activity'] = df[SENSOR_COLS].std(axis=1)
+    best_start = 0
+    max_activity = 0
+    
+    for i in range(len(df) - TEMPLATE_LENGTH):
+        window = df.iloc[i:i+TEMPLATE_LENGTH]
+        avg_act = window['Activity'].mean()
+        if avg_act > max_activity:
+            max_activity = avg_act
+            best_start = i
+    
+    # Extraer y procesar
+    segment = df.iloc[best_start:best_start+TEMPLATE_LENGTH]
+    features = extract_temporal_features(segment[SENSOR_COLS])
+    template_norm = normalize_sequence(features)
+    
+    # Guardar
+    data = {
+        'gesture_name': gesture_name,
+        'templates': [template_norm], # Lista para soportar múltiples variaciones a futuro
+        'template_length': TEMPLATE_LENGTH,
+        'avg_activity': max_activity,
+        'trained_date': time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    joblib.dump(data, get_gesture_path(gesture_name))
+    print(f"🎉 Modelo guardado: {gesture_name.upper()} (Actividad: {max_activity:.2f})")
+
+# --- FASE 2: DETECCIÓN EN TIEMPO REAL (HYBRID: CLI + WEB) ---
+
+def run_detector(serial_port, baud_rate, target_gestures=None, message_callback=None, data_callback=None):
+    global realtime_buffer, cooldown_counter
+    
+    # Sistema de Logs Híbrido (Consola + Web)
+    def emit_log(text, type="info", data=None):
+        # 1. Salida a Consola
+        if type == "gesture": print(f"\n✨ HECHIZO DETECTADO: {text}")
+        elif type == "error": print(f"❌ {text}")
+        else: print(f"[{type}] {text}")
+        
+        # 2. Salida a Web (si existe callback)
+        if message_callback:
+            msg = {"text": text, "type": type, "data": data, "timestamp": time.time()}
+            message_callback(json.dumps(msg))
+
+    # Carga de modelos
+    if target_gestures:
+        gestures = {name: load_gesture(name) for name in target_gestures if load_gesture(name)}
+    else:
+        gestures = load_all_gestures()
+        
+    if not gestures:
+        emit_log("No hay modelos cargados. Usa 'train' primero.", "error")
+        return
+
+    template_len = list(gestures.values())[0]['template_length']
     
     try:
         ser = serial.Serial(serial_port, baud_rate, timeout=1)
         time.sleep(2)
         ser.flushInput()
-        emit_log("Detector ACTIVO.", "success")
+        emit_log(f"Detector iniciado en {serial_port}. Gestos: {len(gestures)}", "success")
     except Exception as e:
-        emit_log(f"Error conexión: {e}", "error")
+        emit_log(f"Error Serial: {e}", "error")
         return
 
-    evaluation_counter = 0
+    evaluation_ctr = 0
     
     try:
         while True:
-            try:
-                if ser.in_waiting > 0:
+            if ser.in_waiting:
+                try:
                     line = ser.readline().decode('latin-1').strip()
                     parts = line.split(',')
                     
                     if len(parts) == NUM_SENSOR_VALUES:
-                        try:
-                            vals = [float(p) for p in parts]
-                            
-                            # --- CALLBACK DE DATOS CRUDOS (Para el dibujo) ---
-                            if data_callback:
-                                # Enviamos solo Gyro X/Y/Z para el dibujo rápido
-                                data_packet = {
-                                    "gx": vals[0], 
-                                    "gy": vals[1], 
-                                    "gz": vals[2],
-                                    "ax": vals[3],
-                                    "ay": vals[4],
-                                    "az": vals[5]
-                                }
-                                data_callback(data_packet)
-                            # -------------------------------------------------
+                        vals = [float(p) for p in parts]
+                        
+                        # --- ENVIAR DATOS CRUDOS A LA WEB (DIBUJO) ---
+                        if data_callback:
+                            data_packet = {
+                                "gx": vals[0], "gy": vals[1], "gz": vals[2],
+                                "ax": vals[3], "ay": vals[4], "az": vals[5]
+                            }
+                            data_callback(data_packet)
+                        # ---------------------------------------------
 
-                            realtime_buffer.append(vals)
+                        realtime_buffer.append(vals)
+                        if len(realtime_buffer) > DETECTION_WINDOW: 
+                            realtime_buffer.pop(0)
+                        
+                        if cooldown_counter > 0:
+                            cooldown_counter -= 1
+                            continue
                             
-                            if len(realtime_buffer) > DETECTION_WINDOW: 
-                                realtime_buffer.pop(0)
+                        evaluation_ctr += 1
+                        # Evaluar solo si tenemos datos suficientes y toca turno
+                        if evaluation_ctr >= STEP_SIZE and len(realtime_buffer) >= template_len:
+                            evaluation_ctr = 0
                             
-                            if cooldown_counter > 0:
-                                cooldown_counter -= 1
-                                continue
+                            # Análisis de Actividad (ahorra CPU si está quieto)
+                            recent = pd.DataFrame(realtime_buffer[-template_len:], columns=SENSOR_COLS)
+                            if recent.std().mean() < MIN_ACTIVITY: continue
                             
-                            evaluation_counter += 1
+                            # Procesamiento
+                            feats = extract_temporal_features(realtime_buffer[-template_len:])
+                            curr_seq = normalize_sequence(feats)
                             
-                            if evaluation_counter >= STEP_SIZE and len(realtime_buffer) >= template_length:
-                                evaluation_counter = 0
-                                recent_df = pd.DataFrame(realtime_buffer[-template_length:], columns=SENSOR_COLS)
-                                activity = recent_df.std().mean()
+                            # Comparación DTW
+                            best_name = None
+                            min_dist = float('inf')
+                            
+                            for name, model in gestures.items():
+                                for temp in model['templates']:
+                                    d = dtw_distance(curr_seq, temp)
+                                    if d < min_dist:
+                                        min_dist = d
+                                        best_name = name
+                            
+                            # Validación de Umbral
+                            if min_dist <= DTW_THRESHOLD:
+                                # Calcular confianza (100% = distancia 0)
+                                confidence = max(0, 100 - (min_dist / DTW_THRESHOLD * 100))
                                 
-                                if activity < MIN_ACTIVITY: 
-                                    continue 
-                                
-                                current_features = extract_temporal_features(realtime_buffer[-template_length:])
-                                current_seq_norm = normalize_sequence(current_features)
-                                
-                                best_gesture = None
-                                min_dist = float('inf')
-                                
-                                for name, g_data in all_gestures.items():
-                                    for template in g_data['templates']:
-                                        d = dtw_distance(current_seq_norm, template)
-                                        if d < min_dist:
-                                            min_dist = d
-                                            best_gesture = name
-                                
-                                if min_dist <= DTW_THRESHOLD:
-                                    confidence = max(0, 100 - (min_dist / DTW_THRESHOLD * 100))
-                                    emit_log(
-                                        f"Gesto detectado: {best_gesture} ({confidence:.1f}%)", 
-                                        "gesture", 
-                                        {"name": best_gesture, "score": confidence}
-                                    )
-                                    cooldown_counter = COOLDOWN_SAMPLES
-                                    realtime_buffer = []
-                                    
-                        except ValueError:
-                            pass
-            except UnicodeDecodeError:
-                pass
+                                emit_log(best_name, "gesture", {"name": best_name, "score": confidence})
+                                cooldown_counter = COOLDOWN_SAMPLES
+                                realtime_buffer = []
+
+                except ValueError: pass
             
-            # Pequeña pausa para permitir que Flask respire, pero muy corta para fluidez
-            time.sleep(0.002) 
-                
-    except KeyboardInterrupt:
-        emit_log("Detenido.", "system")
-    except Exception as e:
-        emit_log(f"Error crítico: {e}", "error")
-    finally:
-        if 'ser' in locals() and ser.is_open:
-            ser.close()
+            # Pequeño sleep para no saturar CPU, pero bajo para fluidez del dibujo
+            time.sleep(0.002)
 
-# --- BLOQUE PRINCIPAL ---
+    except KeyboardInterrupt:
+        emit_log("Detector detenido.", "system")
+    finally:
+        if 'ser' in locals() and ser.is_open: ser.close()
+
+# --- FASE 3: RECOLECCIÓN DE DATOS (RESTORED) ---
+
+def collect_data(output_file, repetitions, serial_port, baud_rate):
+    print(f"📡 Conectando a {serial_port}...")
+    try:
+        ser = serial.Serial(serial_port, baud_rate, timeout=1)
+        time.sleep(2)
+        ser.flushInput()
+        print("🟢 Listo para grabar.")
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return
+
+    with open(output_file, 'w') as f:
+        f.write(HEADER)
+        print(f"\n📝 Grabando {repetitions} repeticiones en '{output_file}'")
+        
+        for i in range(repetitions):
+            input(f"Repetición {i+1}/{repetitions} - Presiona ENTER para empezar...")
+            print("🔴 GRABANDO... (Ctrl+C para parar esta toma)")
+            
+            samples = 0
+            try:
+                while True:
+                    if ser.in_waiting:
+                        line = ser.readline().decode('latin-1').strip()
+                        if line.count(',') == 5: # Validación básica CSV
+                            f.write(line + '\n')
+                            samples += 1
+                            sys.stdout.write(f"\rMuestras: {samples}")
+                            sys.stdout.flush()
+                    time.sleep(0.01)
+            except KeyboardInterrupt:
+                print(f"\n✅ Repetición {i+1} guardada.")
+                pass
+                
+    print("\n🎉 Colección finalizada.")
+    ser.close()
+
+# --- UTILITIES CLI ---
+
+def visualize_template(gesture_name=None):
+    if gesture_name:
+        data = load_gesture(gesture_name)
+        if data:
+            print(f"\n📊 GESTO: {data['gesture_name']}")
+            print(f"   Fecha: {data['trained_date']}")
+            print(f"   Samples: {data['template_length']}")
+        else:
+            print("❌ No encontrado.")
+    else:
+        gestures = list_trained_gestures()
+        print(f"\n📚 Gestos disponibles ({len(gestures)}):")
+        for g in gestures: print(f" - {g}")
+
+# --- PUNTO DE ENTRADA PRINCIPAL (CLI) ---
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("\n" + "="*70)
-        print("🪄 SISTEMA DE DETECCIÓN MULTI-GESTO CON SECUENCIA TEMPORAL")
-        print("="*70)
-        print("\nCOMANDOS DISPONIBLES:")
-        
-        print("\n1. RECOLECTAR DATOS PARA UN GESTO:")
-        print("   python Entrenamiento.py collect <salida.csv> <PUERTO> <REPS>")
-        print("   Ejemplo: python Entrenamiento.py collect lumos.csv /dev/ttyUSB0 10")
-        
-        print("\n2. ENTRENAR UN GESTO ESPECÍFICO:")
-        print("   python Entrenamiento.py train <archivo.csv> [nombre_gesto]")
-        print("   Ejemplo: python Entrenamiento.py train lumos.csv lumos")
-        print("   (Si no especificas nombre, usa el nombre del archivo)")
-        
-        print("\n3. DETECTAR GESTOS:")
-        print("   a) Detectar TODOS los gestos entrenados:")
-        print("      python Entrenamiento.py detect <PUERTO> <BAUD>")
-        print("      Ejemplo: python Entrenamiento.py detect /dev/ttyUSB0 115200")
-        print("\n   b) Detectar SOLO gestos específicos:")
-        print("      python Entrenamiento.py detect <PUERTO> <BAUD> <gesto1> [gesto2] ...")
-        print("      Ejemplo: python Entrenamiento.py detect /dev/ttyUSB0 115200 lumos expelliarmus")
-        
-        print("\n4. VER INFORMACIÓN DE GESTOS:")
-        print("   a) Ver todos los gestos:")
-        print("      python Entrenamiento.py info")
-        print("   b) Ver un gesto específico:")
-        print("      python Entrenamiento.py info <nombre_gesto>")
-        print("      Ejemplo: python Entrenamiento.py info lumos")
-        
-        print("\n5. LISTAR GESTOS ENTRENADOS:")
-        print("   python Entrenamiento.py list")
-        
-        print("\n6. ELIMINAR UN GESTO:")
-        print("   python Entrenamiento.py delete <nombre_gesto>")
-        print("   Ejemplo: python Entrenamiento.py delete lumos")
-        
-        print("\n" + "="*70)
-        print("💡 FLUJO DE TRABAJO RECOMENDADO:")
-        print("   1. Recolecta datos: collect hechizo1.csv /dev/ttyUSB0 10")
-        print("   2. Entrena el gesto: train hechizo1.csv hechizo1")
-        print("   3. Repite para más gestos (hechizo2, hechizo3, etc.)")
-        print("   4. Detecta todos: detect /dev/ttyUSB0 115200")
-        print("="*70 + "\n")
-        
-    elif sys.argv[1] == 'collect' and len(sys.argv) >= 5:
-        output = sys.argv[2]
-        port = sys.argv[3]
-        reps = int(sys.argv[4])
-        collect_data(output, reps, port, 115200)
+        print("\n🪄 GESTOR DE HECHIZOS IOT")
+        print("1. collect <archivo.csv> <PUERTO> <REPS>")
+        print("2. train   <archivo.csv> [nombre]")
+        print("3. detect  <PUERTO>")
+        print("4. list")
+        print("5. info    [nombre]")
+        print("6. delete  <nombre>\n")
+        exit()
 
-    elif sys.argv[1] == 'train':
-        if len(sys.argv) == 3:
-            # Solo archivo CSV, nombre automático
-            train_model(sys.argv[2])
-        elif len(sys.argv) == 4:
-            # Archivo CSV + nombre personalizado
-            train_model(sys.argv[2], sys.argv[3])
-        else:
-            print("❌ Uso: train <archivo.csv> [nombre_gesto]")
+    cmd = sys.argv[1]
     
-    elif sys.argv[1] == 'detect':
-        if len(sys.argv) >= 3:
-            port = sys.argv[2]
-            baud = int(sys.argv[3]) if len(sys.argv) >= 4 and sys.argv[3].isdigit() else 115200
-            
-            # Verificar si hay gestos específicos
-            gesture_start_index = 4 if len(sys.argv) >= 4 and sys.argv[3].isdigit() else 3
-            target_gestures = sys.argv[gesture_start_index:] if len(sys.argv) > gesture_start_index else None
-            
-            run_detector(port, baud, target_gestures)
-        else:
-            print("❌ Uso: detect <PUERTO> <BAUD> [gesto1] [gesto2] ...")
-    
-    elif sys.argv[1] == 'info':
-        if len(sys.argv) == 2:
-            visualize_template()  # Mostrar todos
-        else:
-            visualize_template(sys.argv[2])  # Mostrar específico
-    
-    elif sys.argv[1] == 'list':
-        gestures = list_trained_gestures()
-        if gestures:
-            print("\n📚 Gestos entrenados:")
-            for i, gesture in enumerate(gestures, 1):
-                print(f"   {i}. {gesture}")
-            print(f"\nTotal: {len(gestures)} gesto(s)")
-        else:
-            print("❌ No hay gestos entrenados.")
-    
-    elif sys.argv[1] == 'delete' and len(sys.argv) == 3:
+    if cmd == 'collect':
+        collect_data(sys.argv[2], int(sys.argv[4]), sys.argv[3], 115200)
+    elif cmd == 'train':
+        name = sys.argv[3] if len(sys.argv) > 3 else None
+        train_model(sys.argv[2], name)
+    elif cmd == 'detect':
+        port = sys.argv[2] if len(sys.argv) > 2 else '/dev/ttyUSB0'
+        run_detector(port, 115200)
+    elif cmd == 'list':
+        visualize_template()
+    elif cmd == 'info':
+        visualize_template(sys.argv[2] if len(sys.argv) > 2 else None)
+    elif cmd == 'delete':
         delete_gesture(sys.argv[2])
-    
     else:
-        print("❌ Comando no reconocido. Usa sin argumentos para ver la ayuda.")
+        print("❌ Comando desconocido.")
