@@ -15,33 +15,32 @@ app = Flask(__name__)
 CORS(app) 
 
 DB_NAME = "usuarios.db"
-
-# --- CONFIGURACIÓN SERIAL ---
-# IMPORTANTE: Asegúrate que este puerto es correcto en tu Raspberry Pi
-# En Windows suele ser 'COM3', 'COM4'. En Linux/RPi '/dev/ttyUSB0' o '/dev/ttyACM0'
 PORT_SERIAL = '/dev/ttyUSB0' 
 BAUD_RATE = 115200
 
-# --- VARIABLES GLOBALES DE HILO DE IA ---
+# --- VARIABLES GLOBALES ---
 detection_thread = None
-stop_event = threading.Event()
-message_queue = queue.Queue()
+message_queue = queue.Queue() # Para logs y eventos importantes (lento)
+stream_queue = queue.Queue()  # Para datos de sensores en tiempo real (rápido)
 
-def backend_callback(json_msg):
-    """
-    Esta función es llamada por Entrenamiento.py cada vez que hay un log o detección.
-    Recibe un string JSON.
-    """
+def backend_log_callback(json_msg):
+    """Callback para eventos (Hechizos detectados)"""
     message_queue.put(json_msg)
+
+def backend_data_callback(data_dict):
+    """Callback para flujo de datos crudos (Dibujo)"""
+    # Solo guardamos si la cola no está llena para evitar latencia
+    if stream_queue.qsize() < 100: 
+        stream_queue.put(data_dict)
 
 def run_ai_service():
     """Función que corre en el thread secundario"""
     try:
-        # Llamamos al detector pasándole nuestra función de callback
         Entrenamiento.run_detector(
             serial_port=PORT_SERIAL, 
             baud_rate=BAUD_RATE, 
-            message_callback=backend_callback
+            message_callback=backend_log_callback,
+            data_callback=backend_data_callback # Nuevo callback
         )
     except Exception as e:
         print(f"Error en hilo de IA: {e}")
@@ -50,49 +49,51 @@ def run_ai_service():
 
 @app.route('/')
 def index():
-    # Sirve el index.html principal
     return send_from_directory('../FrontEnd', 'index.html')
 
 @app.route('/<path:filename>')
 def serve_static(filename):
-    # Sirve CSS, JS e imágenes
     return send_from_directory('../FrontEnd', filename)
 
 @app.route('/api/start_practice', methods=['POST'])
 def start_practice():
     global detection_thread
-    
     if detection_thread is not None and detection_thread.is_alive():
-        return jsonify({"success": True, "message": "El servicio de detección ya está activo."})
+        return jsonify({"success": True, "message": "El servicio ya está activo."})
     
-    # Limpiar cola vieja
     with message_queue.mutex:
         message_queue.queue.clear()
+    with stream_queue.mutex:
+        stream_queue.queue.clear()
     
     detection_thread = threading.Thread(target=run_ai_service, daemon=True)
     detection_thread.start()
-    
-    return jsonify({"success": True, "message": "Servicio de detección iniciado."})
+    return jsonify({"success": True, "message": "Servicio iniciado."})
 
 @app.route('/api/get_live_logs', methods=['GET'])
 def get_live_logs():
-    """
-    El frontend consulta esto periódicamente para obtener nuevos eventos.
-    """
+    """Polling lento (1s) para historial"""
     messages = []
-    # Sacar todos los mensajes pendientes de la cola
     try:
         while not message_queue.empty():
-            # Obtener mensaje sin bloquear
-            msg = message_queue.get_nowait()
-            messages.append(msg)
+            messages.append(message_queue.get_nowait())
     except queue.Empty:
         pass
-    
     return jsonify({"logs": messages})
 
-# --- GESTIÓN DE USUARIOS (SQLite) ---
+@app.route('/api/sensor_stream', methods=['GET'])
+def sensor_stream():
+    """Polling rápido (50-100ms) para dibujo"""
+    data_points = []
+    # Recuperar todos los puntos acumulados desde la última llamada
+    try:
+        while not stream_queue.empty():
+            data_points.append(stream_queue.get_nowait())
+    except queue.Empty:
+        pass
+    return jsonify(data_points)
 
+# --- GESTIÓN DE USUARIOS ---
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -130,7 +131,6 @@ def login_usuario():
                    (data['username'], data['password']))
     row = cursor.fetchone()
     conn.close()
-    
     if row:
         return jsonify({"success": True, "nombre": row[0]})
     return jsonify({"success": False, "message": "Credenciales inválidas"})
@@ -138,5 +138,4 @@ def login_usuario():
 if __name__ == '__main__':
     if not os.path.exists(DB_NAME):
         init_db()
-    # Ejecutar servidor accesible desde la red local
-    app.run(debug=True, host='0.0.0.0', port=8001, use_reloader=False)
+    app.run(debug=True, host='0.0.0.0', port=8004, use_reloader=False)

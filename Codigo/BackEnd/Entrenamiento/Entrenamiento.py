@@ -10,13 +10,11 @@ from scipy.spatial.distance import euclidean
 from sklearn.preprocessing import StandardScaler
 
 # --- CONFIGURACIÓN GLOBAL ---
-# Ajusta esta ruta si es necesario para que apunte a donde están tus .pkl
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, 'gesture_models') 
 
 SENSOR_COLS = ['Gyro_X', 'Gyro_Y', 'Gyro_Z', 'Acc_X', 'Acc_Y', 'Acc_Z']
 NUM_SENSOR_VALUES = 6
-HEADER = "Gyro_X,Gyro_Y,Gyro_Z,Acc_X,Acc_Y,Acc_Z\n"
 
 # --- PARÁMETROS DE DETECCIÓN ---
 TEMPLATE_LENGTH = 80        
@@ -32,7 +30,7 @@ cooldown_counter = 0
 if not os.path.exists(MODELS_DIR):
     os.makedirs(MODELS_DIR)
 
-# --- FUNCIONES DE UTILIDAD (Normalización, DTW, Limpieza) ---
+# --- FUNCIONES DE UTILIDAD ---
 def normalize_sequence(sequence):
     scaler = StandardScaler()
     return scaler.fit_transform(sequence)
@@ -73,21 +71,22 @@ def load_all_gestures():
     gestures = {}
     if not os.path.exists(MODELS_DIR):
         return gestures
-        
     files = [f.replace('.pkl', '') for f in os.listdir(MODELS_DIR) if f.endswith('.pkl')]
     for name in files:
         gestures[name] = load_gesture(name)
     return gestures
 
-# --- FASE 2: DETECCIÓN EN TIEMPO REAL (OPTIMIZADA PARA WEB) ---
-def run_detector(serial_port, baud_rate, target_gestures=None, message_callback=None):
+# --- FASE 2: DETECCIÓN EN TIEMPO REAL ---
+def run_detector(serial_port, baud_rate, target_gestures=None, message_callback=None, data_callback=None):
+    """
+    message_callback: Para eventos importantes (Hechizo detectado, errores)
+    data_callback: Para flujo de datos crudos (Dibujo en tiempo real)
+    """
     global realtime_buffer, cooldown_counter
     
-    # Función auxiliar para enviar mensajes a la web y consola
     def emit_log(text_msg, type="info", data=None):
         print(f"[{type.upper()}] {text_msg}")
         if message_callback:
-            # Enviamos un objeto JSON serializado para fácil parseo en JS
             payload = {
                 "text": text_msg,
                 "type": type,
@@ -96,7 +95,6 @@ def run_detector(serial_port, baud_rate, target_gestures=None, message_callback=
             }
             message_callback(json.dumps(payload))
 
-    # Cargar modelos
     if target_gestures is None:
         all_gestures = load_all_gestures()
     else:
@@ -106,68 +104,69 @@ def run_detector(serial_port, baud_rate, target_gestures=None, message_callback=
             if gd: all_gestures[gesture_name] = gd
     
     if not all_gestures:
-        emit_log("No se encontraron modelos de gestos (.pkl) en la carpeta.", "error")
+        emit_log("No se encontraron modelos.", "error")
         return
 
-    # Usamos la longitud del template del primer gesto cargado como referencia
     template_length = list(all_gestures.values())[0]['template_length']
     
-    emit_log(f"Intentando conectar al puerto {serial_port}...", "system")
-    
     try:
-        # Intentar abrir puerto serie
         ser = serial.Serial(serial_port, baud_rate, timeout=1)
-        time.sleep(2) # Esperar reinicio de Arduino/ESP
+        time.sleep(2)
         ser.flushInput()
-        emit_log("Detector ACTIVO. Realiza movimientos con la varita.", "success")
+        emit_log("Detector ACTIVO.", "success")
     except Exception as e:
-        emit_log(f"No se pudo conectar al hardware: {e}", "error")
-        # Modo simulación para pruebas si no hay hardware (opcional)
+        emit_log(f"Error conexión: {e}", "error")
         return
 
     evaluation_counter = 0
     
-    # Bucle principal de lectura
     try:
         while True:
             try:
                 if ser.in_waiting > 0:
                     line = ser.readline().decode('latin-1').strip()
-                    # Esperamos 6 valores: Gx, Gy, Gz, Ax, Ay, Az
                     parts = line.split(',')
                     
                     if len(parts) == NUM_SENSOR_VALUES:
                         try:
                             vals = [float(p) for p in parts]
+                            
+                            # --- CALLBACK DE DATOS CRUDOS (Para el dibujo) ---
+                            if data_callback:
+                                # Enviamos solo Gyro X/Y/Z para el dibujo rápido
+                                data_packet = {
+                                    "gx": vals[0], 
+                                    "gy": vals[1], 
+                                    "gz": vals[2],
+                                    "ax": vals[3],
+                                    "ay": vals[4],
+                                    "az": vals[5]
+                                }
+                                data_callback(data_packet)
+                            # -------------------------------------------------
+
                             realtime_buffer.append(vals)
                             
-                            # Mantener buffer limpio
                             if len(realtime_buffer) > DETECTION_WINDOW: 
                                 realtime_buffer.pop(0)
                             
-                            # Si estamos en enfriamiento (acabamos de detectar algo), esperar
                             if cooldown_counter > 0:
                                 cooldown_counter -= 1
                                 continue
                             
                             evaluation_counter += 1
                             
-                            # Evaluar cada STEP_SIZE muestras si tenemos suficientes datos
                             if evaluation_counter >= STEP_SIZE and len(realtime_buffer) >= template_length:
                                 evaluation_counter = 0
-                                
-                                # Análisis rápido de actividad (si está quieto, no procesar)
                                 recent_df = pd.DataFrame(realtime_buffer[-template_length:], columns=SENSOR_COLS)
                                 activity = recent_df.std().mean()
                                 
                                 if activity < MIN_ACTIVITY: 
                                     continue 
                                 
-                                # Extraer características y normalizar
                                 current_features = extract_temporal_features(realtime_buffer[-template_length:])
                                 current_seq_norm = normalize_sequence(current_features)
                                 
-                                # Comparar con todos los gestos cargados usando DTW
                                 best_gesture = None
                                 min_dist = float('inf')
                                 
@@ -178,37 +177,31 @@ def run_detector(serial_port, baud_rate, target_gestures=None, message_callback=
                                             min_dist = d
                                             best_gesture = name
                                 
-                                # Verificar umbral
                                 if min_dist <= DTW_THRESHOLD:
-                                    # Calcular porcentaje de confianza (aproximado)
                                     confidence = max(0, 100 - (min_dist / DTW_THRESHOLD * 100))
-                                    
-                                    # ¡HECHIZO DETECTADO!
                                     emit_log(
                                         f"Gesto detectado: {best_gesture} ({confidence:.1f}%)", 
                                         "gesture", 
                                         {"name": best_gesture, "score": confidence}
                                     )
-                                    
-                                    # Reiniciar buffer y poner enfriamiento
                                     cooldown_counter = COOLDOWN_SAMPLES
                                     realtime_buffer = []
                                     
                         except ValueError:
-                            pass # Error de parseo de float, ignorar linea
+                            pass
             except UnicodeDecodeError:
-                pass # Error de lectura serial, ignorar
-                
-            time.sleep(0.005) # Pequeña pausa para no saturar CPU
+                pass
+            
+            # Pequeña pausa para permitir que Flask respire, pero muy corta para fluidez
+            time.sleep(0.002) 
                 
     except KeyboardInterrupt:
-        emit_log("Detector detenido manualmente.", "system")
+        emit_log("Detenido.", "system")
     except Exception as e:
-        emit_log(f"Error crítico en detector: {e}", "error")
+        emit_log(f"Error crítico: {e}", "error")
     finally:
         if 'ser' in locals() and ser.is_open:
             ser.close()
-            emit_log("Conexión Serial cerrada.", "system")
 
 # --- BLOQUE PRINCIPAL ---
 if __name__ == "__main__":

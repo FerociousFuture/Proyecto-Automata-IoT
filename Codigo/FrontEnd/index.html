@@ -9,6 +9,7 @@
 </head>
 <body>
 
+    <!-- OVERLAY DE AUTENTICACIÓN -->
     <div id="auth-overlay">
         <div id="login-form" class="auth-card">
             <span class="material-icons" style="font-size: 40px; color: var(--primary-color);">lock</span>
@@ -33,6 +34,7 @@
         </div>
     </div>
 
+    <!-- HEADER SUPERIOR -->
     <header>
         <div class="logo">
             <span class="material-icons">auto_fix_high</span>
@@ -41,31 +43,36 @@
         <div style="display: flex; align-items: center; gap: 15px;">
             <span id="user-display">Invitado</span>
             <button onclick="logout()" class="logout-btn">
-                Salir
+                <span class="material-icons" style="font-size: 1rem; vertical-align: middle;">logout</span> Salir
             </button>
         </div>
     </header>
 
+    <!-- LAYOUT PRINCIPAL -->
     <div class="main-layout">
+        <!-- BARRA LATERAL (Con IDs para efecto QOL) -->
         <aside>
-            <button class="nav-btn active" onclick="nav('dashboard')">
+            <button id="nav-dashboard" class="nav-btn active" onclick="nav('dashboard')">
                 <span class="material-icons">dashboard</span> Panel General
             </button>
-            <button class="nav-btn" onclick="nav('trace')">
+            <button id="nav-trace" class="nav-btn" onclick="nav('trace')">
                 <span class="material-icons">gesture</span> Dibujo de Robot
             </button>
-            <button class="nav-btn" onclick="nav('mqtt')">
+            <button id="nav-mqtt" class="nav-btn" onclick="nav('mqtt')">
                 <span class="material-icons">router</span> Dispositivos MQTT
             </button>
-            <button class="nav-btn" onclick="nav('tutorials')">
+            <button id="nav-tutorials" class="nav-btn" onclick="nav('tutorials')">
                 <span class="material-icons">menu_book</span> Tutoriales
             </button>
-            <button class="nav-btn" onclick="nav('info')">
+            <button id="nav-info" class="nav-btn" onclick="nav('info')">
                 <span class="material-icons">info</span> Descripción Proyecto
             </button>
         </aside>
 
+        <!-- ÁREA DE CONTENIDO -->
         <main>
+            
+            <!-- SECCIÓN 1: DASHBOARD -->
             <div id="dashboard" class="section active">
                 <div class="card">
                     <h2>Estado del Autómata</h2>
@@ -88,46 +95,55 @@
                 <div class="card">
                     <h2>Historial de Comandos Recientes</h2>
                     <p style="color: #aaa; font-size: 0.9em;">Registro en tiempo real de los hechizos detectados y su descripción.</p>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Hora</th>
-                                <th>Comando Detectado</th>
-                                <th>Descripción de la Acción</th>
-                            </tr>
-                        </thead>
-                        <tbody id="command-log">
-                            <tr>
-                                <td>10:45:12</td>
-                                <td><strong>Lumos</strong></td>
-                                <td>Se encendió la luz del dispositivo autómata.</td>
-                            </tr>
-                            <tr>
-                                <td>10:48:30</td>
-                                <td><strong>Ascendio</strong></td>
-                                <td>Aumentó el volumen del sistema de audio.</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                    <div style="max-height: 300px; overflow-y: auto;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Hora</th>
+                                    <th>Comando Detectado</th>
+                                    <th>Descripción de la Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody id="command-log">
+                                <tr>
+                                    <td colspan="3" style="text-align:center; color:#666; padding: 20px;">
+                                        Esperando actividad mágica...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
 
+            <!-- SECCIÓN 2: DIBUJO (CANVAS INTERACTIVO) -->
             <div id="trace" class="section">
                 <h2>Visualizador de Trazos MPU-6050</h2>
                 <div class="card">
-                    <p>Replica visual del movimiento captado por la varita mágica.</p>
-                    <div id="drawing-area">
-                        <span style="color: #666;">(Esperando movimiento...)</span>
-                        <svg class="wand-path" viewBox="0 0 100 100" style="position: absolute; top:0; left:0; width:100%; height:100%; opacity: 0.5;">
-                            <path d="M 30 30 L 70 30 L 30 70 L 70 70" stroke="cyan" stroke-width="2" fill="none" />
-                        </svg>
+                    <p>Replica visual del movimiento captado por la varita mágica en tiempo real.</p>
+                    
+                    <!-- Contenedor del Canvas -->
+                    <div id="drawing-area" style="position: relative; overflow: hidden;">
+                        <canvas id="wandCanvas" width="800" height="350"></canvas>
+                        
+                        <!-- Info superpuesta -->
+                        <div style="position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); padding: 5px 10px; border-radius: 4px; font-size: 0.8rem; color: var(--secondary-color);">
+                            <span id="coords-display">X: 0 | Y: 0</span>
+                        </div>
                     </div>
-                    <div style="margin-top: 15px; text-align: center;">
-                        <button class="auth-btn" style="width: auto; background: #333;">Limpiar Lienzo</button>
+
+                    <div style="margin-top: 15px; text-align: center; display: flex; gap: 10px; justify-content: center;">
+                        <button class="auth-btn" style="width: auto; background: #333;" onclick="clearCanvas()">
+                            <span class="material-icons" style="vertical-align: middle; font-size: 1.1rem;">delete</span> Limpiar Lienzo
+                        </button>
+                        <button class="auth-btn" style="width: auto;" onclick="toggleDrawing()">
+                            <span id="btn-draw-text">Pausar Dibujo</span>
+                        </button>
                     </div>
                 </div>
             </div>
 
+            <!-- SECCIÓN 3: MQTT -->
             <div id="mqtt" class="section">
                 <h2>Gestión de Dispositivos IoT</h2>
                 <div class="card">
@@ -154,6 +170,7 @@
                 </div>
             </div>
 
+            <!-- SECCIÓN 4: TUTORIALES -->
             <div id="tutorials" class="section">
                 <h2>Libro de Hechizos</h2>
                 <div class="spell-grid">
@@ -175,18 +192,26 @@
                         <p>Bucle y subida.</p>
                         <small>Levitar (Servo Motor)</small>
                     </div>
+                     <div class="spell-card">
+                        <span class="spell-icon">⭕</span>
+                        <h3>Stupefy</h3>
+                        <p>Movimiento circular.</p>
+                        <small>Aturdir / Detener</small>
+                    </div>
                 </div>
             </div>
 
+            <!-- SECCIÓN 5: INFO -->
             <div id="info" class="section">
                 <h2>Sobre el Proyecto</h2>
                 <div class="card">
                     <h3>Mascota Robótica IoT & IA</h3>
                     <p>Este proyecto consiste en un pequeño autómata controlado por una <strong>Raspberry Pi Zero 2 W</strong>. El sistema utiliza un control remoto con forma de "varita mágica" que funciona mediante gestos captados por un sensor <strong>MPU-6050</strong>.</p>
                     <p><strong>Objetivo:</strong> Servir de puente entre el usuario y dispositivos IoT, permitiendo controlar luces, sonido y movimientos mediante "hechizos" predefinidos.</p>
-                    <p><strong>Tecnologías:</strong> Python, MQTT, SQLite, HTML/CSS.</p>
+                    <p><strong>Tecnologías:</strong> Python (Flask, Pandas, Scikit-learn), MQTT, SQLite, HTML5 Canvas/CSS3.</p>
                 </div>
             </div>
+
         </main>
     </div>
 
