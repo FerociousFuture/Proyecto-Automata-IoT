@@ -1,7 +1,7 @@
 import RPi.GPIO as GPIO
 import time
 
-# --- Configuración ---
+# --- Configuración --- algo
 BUZZER_PIN = 17  # Pin BCM que estás usando para controlar la base del transistor
 
 # Configuración del modo GPIO
