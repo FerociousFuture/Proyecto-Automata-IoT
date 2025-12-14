@@ -49,40 +49,75 @@ class BuzzerController:
         except ValueError:
             # Ignorar si la frecuencia es inválida
             pass
+    
+    def get_duracion_melodia(self, tono):
+        """Calcula la duración total de una melodía."""
+        melodias = self._obtener_melodias()
+        if tono in melodias:
+            return sum(duracion for _, duracion in melodias[tono])
+        return 0
+    
+    def _obtener_melodias(self):
+        """Retorna el diccionario de todas las melodías disponibles."""
+        # Notas comunes
+        G4 = 392
+        Bb4 = 466
+        C5 = 523
+        Db5 = 554
+        E5 = 659
+        D5 = 587
+        A4 = 440
+        F5 = 698
+        
+        # Among Us Theme - Melodía característica
+        C4 = 262
+        D4 = 294
+        Eb4 = 311
+        F4 = 349
+        G4 = 392
+        Ab4 = 415
+        
+        return {
+            'check': [(440, 0.1), (550, 0.1), (660, 0.1)],
+            'error': [(660, 0.15), (440, 0.15)],
+            'skull': [
+                (G4, 0.15), (Bb4, 0.15), (C5, 0.25), (0, 0.05),
+                (G4, 0.15), (Bb4, 0.15), (Db5, 0.12), (C5, 0.25), (0, 0.05),
+                (G4, 0.15), (Bb4, 0.15), (C5, 0.25), (0, 0.05),
+                (Bb4, 0.15), (G4, 0.35)
+            ],
+            'navidad': [
+                # "Jingle Bells" completo
+                (E5, 0.2), (E5, 0.2), (E5, 0.4),
+                (E5, 0.2), (E5, 0.2), (E5, 0.4),
+                (E5, 0.2), (G4, 0.2), (C5, 0.3), (D5, 0.1), (E5, 0.6),
+                (0, 0.1),
+                (F5, 0.2), (F5, 0.2), (F5, 0.3), (F5, 0.1),
+                (F5, 0.2), (E5, 0.2), (E5, 0.2), (E5, 0.1), (E5, 0.1),
+                (E5, 0.2), (D5, 0.2), (D5, 0.2), (E5, 0.2),
+                (D5, 0.4), (G4, 0.4),
+            ],
+            'amongus': [
+                # Among Us Theme - Intro característico
+                (C4, 0.15), (Eb4, 0.15), (F4, 0.15), (G4, 0.3), (0, 0.1),
+                (F4, 0.15), (Eb4, 0.15), (C4, 0.3), (0, 0.1),
+                (C4, 0.15), (Eb4, 0.15), (F4, 0.15), (G4, 0.3), (0, 0.1),
+                (Ab4, 0.15), (G4, 0.15), (F4, 0.15), (Eb4, 0.3), (0, 0.1),
+                # Repetir con variación
+                (C4, 0.15), (Eb4, 0.15), (F4, 0.15), (G4, 0.3), (0, 0.1),
+                (F4, 0.15), (Eb4, 0.15), (D4, 0.15), (C4, 0.3), (0, 0.1),
+            ]
+        }
             
     def tocar_reaccion(self, tono='check'):
-        """Toca una secuencia de notas predefinida (Ej. 'check', 'error', o 'skull')."""
-        if tono == 'check':
-            # Sonido de confirmación (Ascendente: A4, C5, E5)
-            melodia = [(440, 0.1), (550, 0.1), (660, 0.1)]
-        elif tono == 'error':
-            # Sonido de error (Descendente: E5, A4)
-            melodia = [(660, 0.15), (440, 0.15)]
-        elif tono == 'skull':
-            # Riff icónico de "Smoke on the Water" - Deep Purple
-            # Notas: G-Bb-C, G-Bb-Db-C, G-Bb-C, Bb-G
-            # Frecuencias aproximadas:
-            G3 = 196   # Sol
-            Bb3 = 233  # Si bemol
-            C4 = 262   # Do
-            Db4 = 277  # Do sostenido/Re bemol
-            
-            melodia = [
-                # Primera parte: G-Bb-C
-                (G3, 0.25), (Bb3, 0.25), (C4, 0.35),
-                (0, 0.1),  # Pausa corta
-                # Segunda parte: G-Bb-Db-C
-                (G3, 0.25), (Bb3, 0.25), (Db4, 0.2), (C4, 0.35),
-                (0, 0.1),  # Pausa corta
-                # Tercera parte: G-Bb-C
-                (G3, 0.25), (Bb3, 0.25), (C4, 0.35),
-                (0, 0.1),  # Pausa corta
-                # Final: Bb-G (con énfasis)
-                (Bb3, 0.25), (G3, 0.5)
-            ]
-        else:
+        """Toca una secuencia de notas predefinida."""
+        melodias = self._obtener_melodias()
+        
+        if tono not in melodias:
             return
-
+        
+        melodia = melodias[tono]
+        
         for freq, duration in melodia:
             if freq == 0:  # Pausa
                 time.sleep(duration)
@@ -103,9 +138,11 @@ class BuzzerController:
 OLED_ADDRESS = 0x3C
 OLED_WIDTH = 128
 OLED_HEIGHT = 64
-IDLE_VIDEO_PATH = "Caras/idle.mp4"       # RUTA: Ajusta si es necesario
-BLINK_VIDEO_PATH = "Caras/Parpadeo.mp4" # RUTA: Ajusta si es necesario
-SKULL_VIDEO_PATH = "Caras/Skull.mp4"    # RUTA: Nuevo video de calavera
+IDLE_VIDEO_PATH = "Caras/idle.mp4"
+BLINK_VIDEO_PATH = "Caras/Parpadeo.mp4"
+SKULL_VIDEO_PATH = "Caras/Skull.mp4"
+NAVIDAD_IMAGE_PATH = "Caras/Navidad.png"
+AMONGUS_IMAGE_PATH = "Caras/amongus.png"
 ANIMATION_FPS = 20
 FRAME_DELAY = 1.0 / ANIMATION_FPS
 MIN_IDLE_TIME = 5.0  
@@ -123,9 +160,14 @@ class AnimatedOLED:
         self.running = True
         self.frame = 0
         
+        # Cargar videos
         self.idle_frames = self.load_video_frames(IDLE_VIDEO_PATH)
         self.blink_frames = self.load_video_frames(BLINK_VIDEO_PATH)
         self.skull_frames = self.load_video_frames(SKULL_VIDEO_PATH)
+        
+        # Cargar imágenes estáticas
+        self.navidad_image = self.load_static_image(NAVIDAD_IMAGE_PATH)
+        self.amongus_image = self.load_static_image(AMONGUS_IMAGE_PATH)
         
         if not self.idle_frames:
             self.idle_frames = [Image.new('1', (OLED_WIDTH, OLED_HEIGHT), 0)] 
@@ -135,9 +177,13 @@ class AnimatedOLED:
         self.blink_frame_counter = 0
         self.next_blink_time = time.time() + self.get_random_idle_time()
         
-        # Variables para animación de skull
+        # Variables para animación de skull (NO LOOP)
         self.is_skull_playing = False
         self.skull_frame_counter = 0
+        
+        # Variables para imágenes estáticas con temporizador
+        self.static_image_display = None
+        self.static_image_end_time = 0
 
         # Diccionario de figuras (Caras/Iconos ASCII)
         self.figuras = {
@@ -156,14 +202,39 @@ class AnimatedOLED:
     def get_random_idle_time(self):
         return random.uniform(MIN_IDLE_TIME, MAX_IDLE_TIME)
 
+    def load_static_image(self, image_path):
+        """Carga una imagen estática PNG y la convierte a monocromática."""
+        if not os.path.exists(image_path):
+            print(f"❌ ERROR: Archivo de imagen no encontrado: {image_path}")
+            image_error = Image.new('1', (OLED_WIDTH, OLED_HEIGHT), 0)
+            return image_error
+        
+        try:
+            # Cargar imagen
+            img = Image.open(image_path)
+            # Redimensionar manteniendo aspecto ratio
+            img.thumbnail((OLED_WIDTH, OLED_HEIGHT), Image.Resampling.LANCZOS)
+            # Convertir a escala de grises y luego a monocromático
+            img = img.convert('L')
+            # Aplicar threshold para convertir a blanco y negro puro
+            img = img.point(lambda x: 255 if x > 127 else 0, mode='1')
+            
+            # Centrar la imagen en un canvas del tamaño del OLED
+            canvas_img = Image.new('1', (OLED_WIDTH, OLED_HEIGHT), 0)
+            offset = ((OLED_WIDTH - img.width) // 2, (OLED_HEIGHT - img.height) // 2)
+            canvas_img.paste(img, offset)
+            
+            print(f"✅ Imagen cargada: '{image_path}'")
+            return canvas_img
+        except Exception as e:
+            print(f"❌ Error al cargar imagen {image_path}: {e}")
+            return Image.new('1', (OLED_WIDTH, OLED_HEIGHT), 0)
+
     def load_video_frames(self, video_path):
         """Carga y pre-procesa frames de video en imágenes PIL monocromáticas."""
         if not os.path.exists(video_path):
-            print(f"❌ ERROR: Archivo de video no encontrado: {video_path}. Usando un frame de error.")
+            print(f"❌ ERROR: Archivo de video no encontrado: {video_path}")
             image_error = Image.new('1', (OLED_WIDTH, OLED_HEIGHT), 0)
-            draw_error = canvas(image_error)
-            draw_error.text((5, 5), "NO VIDEO FILE:", fill=1)
-            draw_error.text((5, 15), video_path, fill=1)
             return [image_error] * ANIMATION_FPS
             
         cap = cv2.VideoCapture(video_path)
@@ -185,7 +256,7 @@ class AnimatedOLED:
         return frames
 
     def dibujar_idle(self):
-        """Dibuja el frame actual de la animación idle o blinking."""
+        """Dibuja el frame actual de la animación idle o blinking (CON LOOP)."""
         if self.is_blinking and self.blink_frames:
             current_frame_index = self.blink_frame_counter % len(self.blink_frames)
             frame_image = self.blink_frames[current_frame_index]
@@ -197,25 +268,35 @@ class AnimatedOLED:
                 self.blink_frame_counter = 0
                 self.next_blink_time = time.time() + self.get_random_idle_time()
         else:
+            # IDLE con loop infinito
             current_frame_index = self.frame % len(self.idle_frames)
             frame_image = self.idle_frames[current_frame_index]
             self.device.display(frame_image)
             self.frame += 1
 
     def dibujar_skull(self):
-        """Dibuja el frame actual de la animación de skull."""
+        """Dibuja el frame actual de la animación de skull (SIN LOOP)."""
         if self.skull_frames and self.is_skull_playing:
-            current_frame_index = self.skull_frame_counter % len(self.skull_frames)
-            frame_image = self.skull_frames[current_frame_index]
-            self.device.display(frame_image)
-            self.skull_frame_counter += 1
-            
-            # Si terminó la animación, volver a idle
-            if self.skull_frame_counter >= len(self.skull_frames):
+            if self.skull_frame_counter < len(self.skull_frames):
+                frame_image = self.skull_frames[self.skull_frame_counter]
+                self.device.display(frame_image)
+                self.skull_frame_counter += 1
+            else:
+                # Terminó la animación, volver a idle
                 self.is_skull_playing = False
                 self.skull_frame_counter = 0
                 self.modo = "idle"
                 self.next_blink_time = time.time() + self.get_random_idle_time()
+    
+    def dibujar_static_image(self):
+        """Dibuja una imagen estática hasta que expire el temporizador."""
+        if self.static_image_display and time.time() < self.static_image_end_time:
+            self.device.display(self.static_image_display)
+        else:
+            # Temporizador expirado, volver a idle
+            self.static_image_display = None
+            self.modo = "idle"
+            self.next_blink_time = time.time() + self.get_random_idle_time()
 
     def dibujar_figura(self, nombre_figura):
         """Dibuja una figura específica (mantenemos la lógica ASCII original)."""
@@ -237,7 +318,6 @@ class AnimatedOLED:
     def mostrar_figura(self, nombre):
         """Cambia al modo figura y la muestra."""
         if nombre in self.figuras:
-            # Deshabilitar parpadeo mientras se muestra una figura
             self.modo = "figura"
             self.is_blinking = False 
             self.figura_actual = nombre
@@ -247,23 +327,38 @@ class AnimatedOLED:
             return False
     
     def mostrar_skull(self):
-        """Inicia la animación de skull."""
+        """Inicia la animación de skull (SIN LOOP)."""
         self.modo = "skull"
         self.is_skull_playing = True
         self.is_blinking = False
         self.skull_frame_counter = 0
         return True
+    
+    def mostrar_imagen_con_temporizador(self, imagen, duracion):
+        """Muestra una imagen estática por una duración específica."""
+        self.modo = "static_image"
+        self.static_image_display = imagen
+        self.static_image_end_time = time.time() + duracion
+        self.is_blinking = False
+        
+    def mostrar_navidad(self, duracion):
+        """Muestra la imagen de Navidad por la duración especificada."""
+        self.mostrar_imagen_con_temporizador(self.navidad_image, duracion)
+        
+    def mostrar_amongus(self, duracion):
+        """Muestra la imagen de Among Us por la duración especificada."""
+        self.mostrar_imagen_con_temporizador(self.amongus_image, duracion)
             
     def volver_idle(self):
         """Regresa al modo idle y reinicia el temporizador de parpadeo."""
-        time.sleep(3) # Mostrar la figura por 3 segundos
+        time.sleep(3)
         self.modo = "idle"
         self.figura_actual = None
         self.next_blink_time = time.time() + self.get_random_idle_time()
         
     
     def loop_animacion(self):
-        """Loop principal de animación con lógica de temporizador aleatorio."""
+        """Loop principal de animación."""
         while self.running:
             start_time = time.time()
             
@@ -287,6 +382,10 @@ class AnimatedOLED:
                 sleep_time = FRAME_DELAY - elapsed_time
                 if sleep_time > 0:
                     time.sleep(sleep_time)
+                    
+            elif self.modo == "static_image":
+                self.dibujar_static_image()
+                time.sleep(0.1)
             else:
                 # Si está en modo figura, solo esperar.
                 time.sleep(0.1)
@@ -315,27 +414,40 @@ def ejecutar_comando(oled: AnimatedOLED, buzzer: BuzzerController, comando: str)
     """Ejecuta la acción combinada (OLED + Buzzer) basada en el comando."""
     
     if comando == 'skull':
-        # Comando especial: reproducir video de skull + riff de guitarra
+        # Comando especial: reproducir video de skull + riff de guitarra (SIN LOOP)
         oled.mostrar_skull()
         threading.Thread(target=buzzer.tocar_reaccion, args=('skull',), daemon=True).start()
         print("💀 Comando 'skull' ejecutado (Video Skull.mp4 + Riff de guitarra).")
+    
+    elif comando == 'navidad':
+        # Comando navideño: imagen estática + Jingle Bells
+        duracion = buzzer.get_duracion_melodia('navidad') + 0.5  # +0.5s de margen
+        oled.mostrar_navidad(duracion)
+        threading.Thread(target=buzzer.tocar_reaccion, args=('navidad',), daemon=True).start()
+        print(f"🎄 Comando 'navidad' ejecutado (Imagen Navidad.png + Jingle Bells por {duracion:.1f}s).")
+    
+    elif comando == 'amongus':
+        # Comando Among Us: imagen estática + tema de Among Us
+        duracion = buzzer.get_duracion_melodia('amongus') + 0.5  # +0.5s de margen
+        oled.mostrar_amongus(duracion)
+        threading.Thread(target=buzzer.tocar_reaccion, args=('amongus',), daemon=True).start()
+        print(f"🚀 Comando 'amongus' ejecutado (Imagen amongus.png + Among Us Theme por {duracion:.1f}s).")
         
     elif oled.mostrar_figura(comando):
-        # 1. Tocar sonido de CHECK en un thread separado para no bloquear la animación del OLED
+        # Tocar sonido de CHECK
         threading.Thread(target=buzzer.tocar_reaccion, args=('check',), daemon=True).start()
-        # 2. Iniciar el temporizador para volver al modo IDLE
         threading.Thread(target=oled.volver_idle, daemon=True).start()
         print(f"✅ Comando '{comando}' ejecutado (Figura + Tono OK).")
         
     elif comando == 'error':
         # Simula una reacción de error
-        oled.mostrar_figura('triste') # Usa una figura para el error
+        oled.mostrar_figura('triste')
         threading.Thread(target=buzzer.tocar_reaccion, args=('error',), daemon=True).start()
         threading.Thread(target=oled.volver_idle, daemon=True).start()
         print("❌ Comando 'error' ejecutado (Figura TRISTE + Tono ERROR).")
         
     else:
-        print(f"Comando desconocido: {comando}. Intenta con una figura, 'skull' o 'error'.")
+        print(f"Comando desconocido: {comando}. Intenta con una figura, 'skull', 'navidad', 'amongus' o 'error'.")
 
 
 # =======================================================
@@ -353,12 +465,15 @@ if __name__ == "__main__":
         
         # 4.2 Inicialización del OLED
         oled = AnimatedOLED()
-        oled.iniciar() # Inicia el loop de animación en un thread
+        oled.iniciar()
         
         print("\n=== SISTEMA LISTO ===")
         print(f"Figuras disponibles: {', '.join(oled.listar_figuras())}")
-        print("Comando especial: 'skull' (reproduce Skull.mp4 + riff de guitarra)")
-        print("Escribe un nombre de figura para probar la reacción combinada.")
+        print("Comandos especiales:")
+        print("  - 'skull' (video Skull.mp4 + riff de guitarra) 💀")
+        print("  - 'navidad' (imagen Navidad.png + Jingle Bells) 🎄")
+        print("  - 'amongus' (imagen amongus.png + Among Us Theme) 🚀")
+        print("\nNOTA: Solo IDLE y Parpadeo hacen loop. El resto se reproduce UNA VEZ.")
         print("Escribe 'error' para simular un fallo.")
         print("Escribe 'salir' para terminar\n")
         
@@ -370,7 +485,7 @@ if __name__ == "__main__":
                 break
             elif comando == "lista":
                 print(f"Figuras disponibles: {', '.join(oled.listar_figuras())}")
-                print("Comando especial: 'skull'")
+                print("Comandos especiales: 'skull', 'navidad', 'amongus'")
             elif comando:
                 ejecutar_comando(oled, buzzer, comando)
                 
@@ -383,6 +498,5 @@ if __name__ == "__main__":
             oled.detener()
         if buzzer:
             buzzer.cleanup()
-        # Limpieza final de GPIO, crucial para evitar errores en ejecuciones futuras
         GPIO.cleanup() 
         print("Programa terminado.")
