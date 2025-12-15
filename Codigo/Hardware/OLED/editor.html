@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Editor Pixel Art - OLED 128x64</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: monospace;
+            background: #1a1a1a;
+            color: #fff;
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+        }
+        
+        .container {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        
+        .editor-panel {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            border: 2px solid #444;
+        }
+        
+        canvas {
+            border: 2px solid #666;
+            cursor: crosshair;
+            image-rendering: pixelated;
+            background: #000;
+        }
+        
+        .controls {
+            margin-top: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        button {
+            padding: 10px 15px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        
+        button:hover {
+            background: #45a049;
+        }
+        
+        button.secondary {
+            background: #2196F3;
+        }
+        
+        button.secondary:hover {
+            background: #0b7dda;
+        }
+        
+        button.danger {
+            background: #f44336;
+        }
+        
+        button.danger:hover {
+            background: #da190b;
+        }
+        
+        .code-output {
+            background: #1a1a1a;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 15px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-size: 12px;
+            border: 1px solid #444;
+        }
+        
+        .preview {
+            background: #000;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            display: inline-block;
+        }
+        
+        h2 {
+            margin-top: 0;
+            color: #4CAF50;
+        }
+        
+        .info {
+            background: #333;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            font-size: 12px;
+        }
+        
+        .tool-selector {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 10px;
+        }
+        
+        .tool-btn {
+            padding: 8px 12px;
+            background: #555;
+            flex: 1;
+        }
+        
+        .tool-btn.active {
+            background: #4CAF50;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="editor-panel">
+            <h2>🎨 Editor Pixel Art</h2>
+            <div class="info">
+                Resolución: 128x64 px (OLED SSD1306)
+            </div>
+            
+            <div class="preview">
+                <canvas id="canvas" width="128" height="64"></canvas>
+            </div>
+            
+            <div class="controls">
+                <div class="tool-selector">
+                    <button class="tool-btn active" id="draw-btn">✏️ Dibujar</button>
+                    <button class="tool-btn" id="erase-btn">🧹 Borrar</button>
+                </div>
+                
+                <button class="secondary" onclick="fillScreen()">Llenar Todo</button>
+                <button class="danger" onclick="clearScreen()">Limpiar Todo</button>
+                <button onclick="generateCode()">📋 Generar Código Python</button>
+                <button class="secondary" onclick="downloadImage()">💾 Descargar PNG</button>
+            </div>
+            
+            <div class="code-output" id="code-output" style="display:none;">
+                <pre id="code-text"></pre>
+            </div>
+        </div>
+        
+        <div class="editor-panel">
+            <h2>🔍 Vista Ampliada</h2>
+            <canvas id="zoom-canvas" width="512" height="256"></canvas>
+            <div class="info">
+                Click izq: Dibujar | Click der: Borrar<br>
+                Arrastra para dibujar múltiples píxeles
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const zoomCanvas = document.getElementById('zoom-canvas');
+        const zoomCtx = zoomCanvas.getContext('2d');
+        
+        const WIDTH = 128;
+        const HEIGHT = 64;
+        const ZOOM = 4;
+        
+        let pixels = Array(HEIGHT).fill().map(() => Array(WIDTH).fill(0));
+        let isDrawing = false;
+        let currentTool = 'draw'; // 'draw' or 'erase'
+        
+        // Herramientas
+        document.getElementById('draw-btn').addEventListener('click', () => {
+            currentTool = 'draw';
+            document.getElementById('draw-btn').classList.add('active');
+            document.getElementById('erase-btn').classList.remove('active');
+        });
+        
+        document.getElementById('erase-btn').addEventListener('click', () => {
+            currentTool = 'erase';
+            document.getElementById('erase-btn').classList.add('active');
+            document.getElementById('draw-btn').classList.remove('active');
+        });
+        
+        function drawPixel(x, y, value) {
+            if (x < 0 || x >= WIDTH || y < 0 || y >= HEIGHT) return;
+            pixels[y][x] = value;
+            render();
+        }
+        
+        function render() {
+            // Canvas pequeño (real)
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+            ctx.fillStyle = '#fff';
+            
+            for (let y = 0; y < HEIGHT; y++) {
+                for (let x = 0; x < WIDTH; x++) {
+                    if (pixels[y][x]) {
+                        ctx.fillRect(x, y, 1, 1);
+                    }
+                }
+            }
+            
+            // Canvas ampliado
+            zoomCtx.fillStyle = '#000';
+            zoomCtx.fillRect(0, 0, WIDTH * ZOOM, HEIGHT * ZOOM);
+            zoomCtx.fillStyle = '#fff';
+            
+            for (let y = 0; y < HEIGHT; y++) {
+                for (let x = 0; x < WIDTH; x++) {
+                    if (pixels[y][x]) {
+                        zoomCtx.fillRect(x * ZOOM, y * ZOOM, ZOOM, ZOOM);
+                    }
+                }
+            }
+            
+            // Grid en zoom
+            zoomCtx.strokeStyle = '#333';
+            zoomCtx.lineWidth = 1;
+            for (let x = 0; x <= WIDTH; x++) {
+                zoomCtx.beginPath();
+                zoomCtx.moveTo(x * ZOOM, 0);
+                zoomCtx.lineTo(x * ZOOM, HEIGHT * ZOOM);
+                zoomCtx.stroke();
+            }
+            for (let y = 0; y <= HEIGHT; y++) {
+                zoomCtx.beginPath();
+                zoomCtx.moveTo(0, y * ZOOM);
+                zoomCtx.lineTo(WIDTH * ZOOM, y * ZOOM);
+                zoomCtx.stroke();
+            }
+        }
+        
+        // Eventos de dibujo (canvas ampliado)
+        zoomCanvas.addEventListener('mousedown', (e) => {
+            isDrawing = true;
+            const rect = zoomCanvas.getBoundingClientRect();
+            const x = Math.floor((e.clientX - rect.left) / ZOOM);
+            const y = Math.floor((e.clientY - rect.top) / ZOOM);
+            const value = currentTool === 'draw' ? 1 : 0;
+            drawPixel(x, y, value);
+        });
+        
+        zoomCanvas.addEventListener('mousemove', (e) => {
+            if (!isDrawing) return;
+            const rect = zoomCanvas.getBoundingClientRect();
+            const x = Math.floor((e.clientX - rect.left) / ZOOM);
+            const y = Math.floor((e.clientY - rect.top) / ZOOM);
+            const value = currentTool === 'draw' ? 1 : 0;
+            drawPixel(x, y, value);
+        });
+        
+        zoomCanvas.addEventListener('mouseup', () => {
+            isDrawing = false;
+        });
+        
+        zoomCanvas.addEventListener('mouseleave', () => {
+            isDrawing = false;
+        });
+        
+        zoomCanvas.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            const rect = zoomCanvas.getBoundingClientRect();
+            const x = Math.floor((e.clientX - rect.left) / ZOOM);
+            const y = Math.floor((e.clientY - rect.top) / ZOOM);
+            drawPixel(x, y, 0);
+        });
+        
+        function clearScreen() {
+            pixels = Array(HEIGHT).fill().map(() => Array(WIDTH).fill(0));
+            render();
+        }
+        
+        function fillScreen() {
+            pixels = Array(HEIGHT).fill().map(() => Array(WIDTH).fill(1));
+            render();
+        }
+        
+        function generateCode() {
+            const output = document.getElementById('code-output');
+            const codeText = document.getElementById('code-text');
+            
+            let code = `from PIL import Image
+from luma.core.interface.serial import i2c
+from luma.core.render import canvas
+from luma.oled.device import ssd1306
+
+# Configurar OLED
+serial = i2c(port=1, address=0x3C)
+device = ssd1306(serial, width=128, height=64)
+
+# Datos de la imagen (pixel art)
+pixel_data = [\n`;
+            
+            for (let y = 0; y < HEIGHT; y++) {
+                code += `    [${pixels[y].join(', ')}],\n`;
+            }
+            
+            code += `]
+
+# Dibujar en la OLED
+with canvas(device) as draw:
+    for y in range(64):
+        for x in range(128):
+            if pixel_data[y][x] == 1:
+                draw.point((x, y), fill="white")
+
+# Mantener imagen visible
+import time
+time.sleep(5)
+device.cleanup()`;
+            
+            codeText.textContent = code;
+            output.style.display = 'block';
+        }
+        
+        function downloadImage() {
+            const link = document.createElement('a');
+            link.download = 'pixel-art-oled.png';
+            link.href = canvas.toDataURL();
+            link.click();
+        }
+        
+        // Inicializar
+        render();
+    </script>
+</body>
+</html>
